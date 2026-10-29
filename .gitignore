@@ -1,0 +1,89 @@
+# ===== 通用 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+
+# ===== Python (backend / agent) =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+.venv/
+venv/
+ENV/
+env/
+
+# 测试 / 缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ===== Node / 前端 =====
+node_modules/
+dist/
+dist-ssr/
+.vite/
+build/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ===== 环境变量 / 密钥（务必不要提交）=====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+config.local.*
+
+# ===== LaTeX 编译中间产物 =====
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.idx
+*.ilg
+*.ind
+*.lof
+*.lot
+*.out
+*.synctex.gz
+*.toc
+*.xdv
+*.bcf
+*.run.xml
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.iml
+*.swp
+
+# ===== 本地临时 =====
+tmp/
+temp/
+*.tmp

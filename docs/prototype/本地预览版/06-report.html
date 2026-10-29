@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1440">
+<title>过程报告 · AI Coding 考试平台</title>
+<style>
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #eef2f7; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: #0f172a; font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  button { font-family: inherit; }
+  a { text-decoration: none; color: inherit; }
+  svg { flex-shrink: 0; display: block; }
+
+  .app, .student-page, .teacher-shell, .login-page, .index-page { width: 1440px; height: 900px; overflow: hidden; }
+  .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
+  .muted { color: #64748b; }
+  .strong { color: #334155; font-weight: 600; }
+  .link { color: #2563eb; font-size: 11.5px; }
+  .ml-auto { margin-left: auto; }
+  .row { display: flex; align-items: center; }
+  .between { display: flex; align-items: center; justify-content: space-between; }
+
+  /* brand */
+  .brand { display: flex; align-items: center; gap: 9px; }
+  .logo { width: 30px; height: 30px; border-radius: 9px; background: #2563eb; display: flex; align-items: center; justify-content: center; }
+  .brand-name { font-size: 15px; font-weight: 700; letter-spacing: .2px; color: #0f172a; }
+  .brand-name.small { font-size: 13px; }
+  .brand-sub { font-size: 9.5px; color: #94a3b8; margin-top: 1px; }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; background: #e0e7ff; color: #3730a3; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+  .avatar.sm { width: 28px; height: 28px; font-size: 10px; }
+  .user-inline { display: flex; align-items: center; gap: 9px; }
+  .user-name { font-size: 11.5px; font-weight: 600; color: #334155; }
+  .user-role { font-size: 9.5px; color: #94a3b8; margin-top: 1px; }
+
+  /* buttons */
+  .btn { height: 36px; padding: 0 14px; border-radius: 8px; font-size: 12.5px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; background: #fff; color: #334155; }
+  .btn-primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .btn-secondary { background: #fff; color: #334155; border-color: #dbe2ea; }
+  .btn-ghost { background: transparent; color: #475569; border-color: transparent; }
+  .btn-danger { background: #dc2626; color: #fff; border-color: #dc2626; }
+  .btn-sm { height: 30px; padding: 0 10px; font-size: 11px; border-radius: 7px; }
+  .btn-block { width: 100%; }
+  .icon-btn { width: 30px; height: 30px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: #64748b; background: #fff; border: 1px solid #eef2f7; }
+  .icon-btn.plain { border-color: transparent; background: transparent; }
+
+  /* chips / badges */
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: 6px; font-size: 11px; font-weight: 500; }
+  .chip-blue { background: #eff6ff; color: #1d4ed8; border: 1px solid #dbeafe; }
+  .chip-amber { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+  .chip-gray { background: #f8fafc; color: #475569; border: 1px solid #e2e8f0; }
+  .badge { display: inline-flex; align-items: center; justify-content: center; height: 20px; padding: 0 7px; border-radius: 5px; font-size: 10px; font-weight: 600; white-space: nowrap; }
+  .badge.green { background: #ecfdf5; color: #047857; }
+  .badge.blue { background: #eff6ff; color: #1d4ed8; }
+  .badge.amber { background: #fffbeb; color: #b45309; }
+  .badge.red { background: #fef2f2; color: #b91c1c; }
+  .badge.gray { background: #f1f5f9; color: #475569; }
+  .badge.purple { background: #f5f3ff; color: #6d28d9; }
+
+  /* cards */
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; }
+  .card-head { padding: 13px 16px; border-bottom: 1px solid #eef2f7; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .card-title { font-size: 13px; font-weight: 700; color: #0f172a; }
+  .card-sub { font-size: 10px; color: #94a3b8; margin-top: 2px; }
+  .card-body { padding: 16px; }
+
+  /* page head */
+  .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+  .page-title { font-size: 22px; font-weight: 700; color: #0f172a; letter-spacing: -.2px; line-height: 1.2; }
+  .page-sub { font-size: 11.5px; color: #64748b; margin-top: 4px; }
+  .page-actions { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+
+  /* stats */
+  .stats-grid { display: flex; gap: 12px; margin-bottom: 14px; }
+  .stat-card { flex: 1; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 13px 15px; display: flex; align-items: center; gap: 11px; }
+  .stat-icon { width: 34px; height: 34px; border-radius: 9px; background: #eff6ff; color: #2563eb; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .stat-icon.green { background: #ecfdf5; color: #059669; }
+  .stat-icon.amber { background: #fffbeb; color: #d97706; }
+  .stat-icon.red { background: #fef2f2; color: #dc2626; }
+  .stat-icon.purple { background: #f5f3ff; color: #7c3aed; }
+  .stat-value { font-size: 19px; font-weight: 700; color: #0f172a; line-height: 1.1; }
+  .stat-label { font-size: 10px; color: #64748b; margin-top: 3px; }
+  .stat-trend { margin-left: auto; font-size: 9.5px; color: #94a3b8; }
+  .stat-trend.green { color: #059669; }
+  .stat-trend.red { color: #dc2626; }
+
+  /* tables */
+  .table { width: 100%; border-collapse: collapse; }
+  .table th { height: 36px; padding: 0 12px; text-align: left; font-size: 10px; font-weight: 600; color: #64748b; background: #f8fafc; border-bottom: 1px solid #eef2f7; white-space: nowrap; }
+  .table td { height: 52px; padding: 0 12px; font-size: 11.5px; color: #334155; border-bottom: 1px solid #f1f5f9; }
+  .table tr:last-child td { border-bottom: none; }
+  .table .sub { font-size: 9.5px; color: #94a3b8; margin-top: 2px; }
+  .table-footer { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-top: 1px solid #eef2f7; font-size: 10px; color: #94a3b8; }
+  .table-tools { display: flex; align-items: center; gap: 8px; }
+
+  /* tabs */
+  .tabs { display: flex; align-items: center; gap: 22px; border-bottom: 1px solid #e2e8f0; }
+  .tab { height: 40px; display: flex; align-items: center; font-size: 12px; color: #64748b; border-bottom: 2px solid transparent; }
+  .tab.active { color: #1d4ed8; font-weight: 600; border-bottom-color: #2563eb; }
+  .tab-count { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 4px; background: #f1f5f9; color: #64748b; font-size: 9px; margin-left: 4px; }
+
+  /* forms */
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .label { font-size: 11px; color: #475569; font-weight: 600; }
+  .input, .select { height: 36px; width: 100%; border: 1px solid #dbe2ea; border-radius: 8px; padding: 0 10px; font-size: 12px; color: #334155; background: #fff; display: flex; align-items: center; gap: 6px; }
+  .select { justify-content: space-between; }
+  .hint { font-size: 10px; color: #94a3b8; }
+  .form-grid { display: flex; gap: 12px; }
+  .form-grid.two > .field { width: 50%; }
+  .form-grid.four > .field { width: 25%; }
+
+  /* bars */
+  .bar { height: 6px; border-radius: 3px; background: #eef2f7; overflow: hidden; }
+  .bar-fill { display: block; height: 6px; border-radius: 3px; background: #2563eb; }
+  .bar-fill.green { background: #059669; }
+  .bar-fill.amber { background: #d97706; }
+  .bar-fill.purple { background: #7c3aed; }
+  .w-0 { width: 0%; } .w-10 { width: 10%; } .w-30 { width: 30%; } .w-60 { width: 60%; } .w-80 { width: 80%; } .w-82 { width: 82%; } .w-94 { width: 94%; }
+
+  /* checks */
+  .check-line { display: flex; align-items: center; gap: 7px; font-size: 10.5px; color: #475569; padding: 5px 0; }
+  .check-line .ok { color: #059669; display: flex; }
+  .check-line .warn { color: #d97706; display: flex; }
+  .check-row { display: flex; align-items: flex-start; gap: 8px; font-size: 11px; color: #475569; line-height: 1.5; }
+  .check-box { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid #cbd5e1; flex-shrink: 0; margin-top: 1px; display: flex; align-items: center; justify-content: center; }
+  .check-box.checked { background: #2563eb; border-color: #2563eb; }
+
+  /* timeline */
+  .tl-item { display: flex; gap: 10px; padding-bottom: 12px; }
+  .tl-item:last-child { padding-bottom: 0; }
+  .tl-rail { width: 12px; display: flex; flex-direction: column; align-items: center; flex-shrink: 0; }
+  .tl-dot { width: 8px; height: 8px; border-radius: 50%; background: #cbd5e1; margin-top: 4px; flex-shrink: 0; }
+  .tl-dot.blue { background: #2563eb; }
+  .tl-dot.green { background: #059669; }
+  .tl-dot.amber { background: #d97706; }
+  .tl-dot.red { background: #dc2626; }
+  .tl-line { width: 1px; flex: 1; background: #e2e8f0; margin-top: 4px; }
+  .tl-item:last-child .tl-line { display: none; }
+  .tl-time { width: 38px; font-size: 9.5px; color: #94a3b8; flex-shrink: 0; padding-top: 1px; }
+  .tl-content { flex: 1; }
+  .tl-title { font-size: 11.5px; font-weight: 600; color: #334155; }
+  .tl-desc { font-size: 10px; color: #64748b; margin-top: 2px; line-height: 1.5; }
+
+  /* student nav */
+  .student-nav { height: 64px; background: #fff; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; }
+  .student-nav-left { display: flex; align-items: center; gap: 28px; }
+  .nav-links { display: flex; align-items: center; gap: 24px; }
+  .nav-link { font-size: 12px; color: #64748b; height: 64px; display: flex; align-items: center; border-bottom: 2px solid transparent; }
+  .nav-link.active { color: #1d4ed8; font-weight: 600; border-bottom-color: #2563eb; }
+  .student-nav-right { display: flex; align-items: center; gap: 10px; }
+  .student-content { width: 1180px; margin-left: auto; margin-right: auto; padding: 22px 0; }
+
+  /* teacher shell */
+  .teacher-shell { display: flex; background: #f5f7fb; }
+  .teacher-sidebar { width: 220px; background: #fff; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; flex-shrink: 0; }
+  .teacher-brand { height: 64px; padding: 0 18px; display: flex; align-items: center; gap: 9px; border-bottom: 1px solid #eef2f7; }
+  .side-nav { padding: 12px 10px; }
+  .side-label { padding: 10px 10px 6px; font-size: 9.5px; font-weight: 600; color: #94a3b8; letter-spacing: .6px; }
+  .side-link { height: 38px; padding: 0 10px; border-radius: 7px; display: flex; align-items: center; gap: 9px; font-size: 12px; color: #475569; }
+  .side-link.active { background: #eff6ff; color: #1d4ed8; font-weight: 600; }
+  .side-bottom { margin-top: auto; padding: 14px; border-top: 1px solid #eef2f7; }
+  .teacher-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .teacher-topbar { height: 60px; background: #fff; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; }
+  .breadcrumb { font-size: 11px; color: #94a3b8; display: flex; align-items: center; gap: 7px; }
+  .breadcrumb .current { color: #334155; font-weight: 600; }
+  .topbar-actions { display: flex; align-items: center; gap: 8px; }
+  .search-box { height: 30px; width: 200px; border: 1px solid #dbe2ea; border-radius: 7px; display: flex; align-items: center; gap: 6px; padding: 0 9px; font-size: 10px; color: #94a3b8; background: #fff; }
+  .teacher-content { flex: 1; min-height: 0; padding: 20px 24px; overflow: hidden; }
+
+
+  .report-tabs { display: flex; gap: 24px; border-bottom: 1px solid #e2e8f0; margin-bottom: 13px; }
+  .report-tabs .tab { height: 37px; }
+  .report-summary { display: flex; align-items: center; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 20px; gap: 26px; margin-bottom: 13px; }
+  .rs-score { width: 175px; flex-shrink: 0; }
+  .rs-label { font-size: 9.5px; color: #94a3b8; }
+  .rs-value { font-size: 32px; font-weight: 700; color: #0f172a; line-height: 1.1; }
+  .rs-value span { font-size: 11px; color: #94a3b8; font-weight: 500; }
+  .rs-note { font-size: 9px; color: #b45309; margin-top: 3px; }
+  .rs-item { flex: 1; }
+  .rs-item-label { font-size: 10px; color: #64748b; }
+  .rs-item-value { font-size: 15px; font-weight: 700; color: #0f172a; margin: 2px 0 5px; }
+  .rs-item-value span { font-size: 9.5px; color: #94a3b8; font-weight: 500; }
+  .rs-item-value.amber { color: #d97706; }
+  .report-main { display: flex; gap: 13px; }
+  .report-timeline-card { flex: 1; min-width: 0; }
+  .report-side { width: 360px; flex-shrink: 0; display: flex; flex-direction: column; gap: 13px; }
+  .rubric-item { margin-bottom: 8px; }
+  .rubric-item.last { margin-bottom: 0; }
+  .rubric-row { display: flex; justify-content: space-between; font-size: 10px; color: #475569; margin-bottom: 4px; }
+  .rubric-row strong { color: #334155; }
+  .rubric-ev { font-size: 9px; color: #94a3b8; margin-top: 3px; }
+  .stats-mini { display: flex; flex-wrap: wrap; }
+  .stats-mini > div { width: 50%; display: flex; justify-content: space-between; padding: 6px 0; font-size: 10px; color: #64748b; border-bottom: 1px solid #f1f5f9; }
+  .stats-mini > div:nth-child(odd) { padding-right: 16px; }
+  .stats-mini > div:nth-child(even) { padding-left: 16px; border-left: 1px solid #f1f5f9; }
+  .stats-mini > div:nth-last-child(-n+2) { border-bottom: none; }
+  .stats-mini strong { color: #334155; }
+
+</style>
+</head>
+<body>
+
+<div class="student-page">
+  
+  <header class="student-nav">
+    <div class="student-nav-left">
+      <div class="brand">
+        <div class="logo"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7l4 5-4 5"/><path d="M12 17h8"/></svg></div>
+        <div class="brand-name">AI Coding 考试平台</div>
+      </div>
+      <nav class="nav-links">
+        <a class="nav-link" href="02-exam-list.html">我的考试</a>
+        <a class="nav-link active" href="06-report.html">成绩报告</a>
+        <a class="nav-link" href="03-precheck.html">考试须知</a>
+      </nav>
+    </div>
+    <div class="student-nav-right">
+      <span class="icon-btn plain"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></span>
+      <span class="icon-btn plain"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></span>
+      <div class="user-inline">
+        <div class="avatar sm">李</div>
+        <div><div class="user-name">李同学</div><div class="user-role">考生 · 2023012345</div></div>
+      </div>
+    </div>
+  </header>
+  <div class="student-content">
+    <div class="page-head">
+      <div><div class="page-title">过程报告</div><div class="page-sub">软件工程 · 期中机考 · 李同学 · 学号 2023012345</div></div>
+      <div class="page-actions">
+        <span class="btn btn-secondary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>导出 PDF</span>
+        <span class="btn btn-primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1v18"/></svg>发起申诉</span>
+      </div>
+    </div>
+
+    <div class="report-tabs">
+      <span class="tab active">总览</span>
+      <span class="tab">时间线</span>
+      <span class="tab">AI 对话（6）</span>
+      <span class="tab">代码变更</span>
+      <span class="tab">评分明细</span>
+    </div>
+
+    <div class="report-summary">
+      <div class="rs-score">
+        <div class="rs-label">当前总分</div>
+        <div class="rs-value">82<span> / 100</span></div>
+        <div class="rs-note">过程分待教师确认</div>
+      </div>
+      <div class="rs-item">
+        <div class="rs-item-label">代码与测试</div>
+        <div class="rs-item-value">66<span> / 70</span></div>
+        <div class="bar"><span class="bar-fill green w-94"></span></div>
+      </div>
+      <div class="rs-item">
+        <div class="rs-item-label">AI 协作</div>
+        <div class="rs-item-value">16<span> / 20</span></div>
+        <div class="bar"><span class="bar-fill purple w-80"></span></div>
+      </div>
+      <div class="rs-item">
+        <div class="rs-item-label">教师复核</div>
+        <div class="rs-item-value amber">待评<span> / 10</span></div>
+        <div class="bar"><span class="bar-fill amber w-0"></span></div>
+      </div>
+    </div>
+
+    <div class="report-main">
+      <div class="card report-timeline-card">
+        <div class="card-head">
+          <div><div class="card-title">考试时间线</div><div class="card-sub">代码、测试、AI 对话与提交的关键事件</div></div>
+          <span class="badge gray">18 个快照</span>
+        </div>
+        <div class="card-body">
+        <div class="tl-item">
+          <div class="tl-rail"><span class="tl-dot green"></span><span class="tl-line"></span></div>
+          <div class="tl-time">13:55</div>
+          <div class="tl-content"><div class="tl-title">进入考场 · 容器就绪</div><div class="tl-desc">环境自检通过，初始仓库已挂载</div></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-rail"><span class="tl-dot blue"></span><span class="tl-line"></span></div>
+          <div class="tl-time">14:02</div>
+          <div class="tl-content"><div class="tl-title">阅读题目与 README</div><div class="tl-desc">打开 src/buggy_sort.py，标记 2 处可疑逻辑</div></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-rail"><span class="tl-dot amber"></span><span class="tl-line"></span></div>
+          <div class="tl-time">14:08</div>
+          <div class="tl-content"><div class="tl-title">运行样例测试 · 6 / 10 通过</div><div class="tl-desc">终端执行 pytest，记录 4 个失败用例</div></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-rail"><span class="tl-dot purple"></span><span class="tl-line"></span></div>
+          <div class="tl-time">14:15</div>
+          <div class="tl-content"><div class="tl-title">调用 Coding Agent · 2 轮</div><div class="tl-desc">引用 src/buggy_sort.py，询问并列排序问题</div></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-rail"><span class="tl-dot blue"></span><span class="tl-line"></span></div>
+          <div class="tl-time">14:22</div>
+          <div class="tl-content"><div class="tl-title">采纳建议 · 修改排序键</div><div class="tl-desc">将 amount 改为 (amount, parse_time(created_at))</div></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-rail"><span class="tl-dot green"></span><span class="tl-line"></span></div>
+          <div class="tl-time">14:28</div>
+          <div class="tl-content"><div class="tl-title">运行样例测试 · 8 / 10 通过</div><div class="tl-desc">2 个时间格式用例仍失败</div></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-rail"><span class="tl-dot amber"></span><span class="tl-line"></span></div>
+          <div class="tl-time">14:36</div>
+          <div class="tl-content"><div class="tl-title">第 1 次提交 · 64 分</div><div class="tl-desc">冻结代码与过程记录，运行隐藏测试</div></div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-rail"><span class="tl-dot green"></span><span class="tl-line"></span></div>
+          <div class="tl-time">14:58</div>
+          <div class="tl-content"><div class="tl-title">第 2 次提交 · 82 分</div><div class="tl-desc">当前最高分；过程分待教师复核</div></div>
+        </div></div>
+      </div>
+
+      <div class="report-side">
+        <div class="card">
+          <div class="card-head"><div class="card-title">AI 协作评分</div><span class="badge purple">16 / 20</span></div>
+          <div class="card-body">
+            <div class="rubric-item">
+              <div class="rubric-row"><span>问题拆解</span><strong>4 / 5</strong></div>
+              <div class="bar"><span class="bar-fill purple w-80"></span></div>
+              <div class="rubric-ev">证据：3 次任务拆解、2 次追问</div>
+            </div>
+            <div class="rubric-item">
+              <div class="rubric-row"><span>上下文质量</span><strong>4 / 5</strong></div>
+              <div class="bar"><span class="bar-fill purple w-80"></span></div>
+              <div class="rubric-ev">证据：@ 引用 2 个文件，未粘贴无关代码</div>
+            </div>
+            <div class="rubric-item">
+              <div class="rubric-row"><span>验证行为</span><strong>4 / 5</strong></div>
+              <div class="bar"><span class="bar-fill purple w-80"></span></div>
+              <div class="rubric-ev">证据：4 次测试运行，2 次失败后定位修正</div>
+            </div>
+            <div class="rubric-item last">
+              <div class="rubric-row"><span>批判性采纳</span><strong>4 / 5</strong></div>
+              <div class="bar"><span class="bar-fill purple w-80"></span></div>
+              <div class="rubric-ev">证据：采纳 2 次，修改 1 次，拒绝 0 次</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><div class="card-title">关键统计</div><span class="link">查看明细</span></div>
+          <div class="card-body stats-mini">
+            <div><span>AI 对话</span><strong>6 轮</strong></div>
+            <div><span>采纳建议</span><strong>2 次</strong></div>
+            <div><span>测试运行</span><strong>4 次</strong></div>
+            <div><span>代码快照</span><strong>18 个</strong></div>
+            <div><span>代码变更</span><strong>+18 / -7</strong></div>
+            <div><span>粘贴事件</span><strong>0 次</strong></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
