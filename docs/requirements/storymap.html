@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>AICoding考试平台 · 用户故事地图</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #eef2f7; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: #0f172a;
+    -webkit-font-smoothing: antialiased;
+  }
+  .canvas {
+    width: 1400px;
+    height: 900px;
+    background: #f8fafc;
+    padding: 26px 30px 20px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .head { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
+  .title { font-size: 28px; font-weight: 700; letter-spacing: -.2px; color: #0f172a; }
+  .subtitle { font-size: 12.5px; color: #64748b; margin-top: 5px; }
+  .legend { display: flex; align-items: center; gap: 14px; font-size: 11px; color: #64748b; }
+  .legend span { display: flex; align-items: center; gap: 5px; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .dot.p0 { background: #2563eb; }
+  .dot.p1 { background: #d97706; }
+  .dot.support { background: #cbd5e1; }
+
+  .grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 130px 270px 350px 270px 270px;
+    grid-template-rows: 44px 180px 280px 150px;
+    gap: 8px;
+  }
+  .stage {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 700;
+    color: #334155;
+  }
+  .stage .num {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #eff6ff; color: #1d4ed8;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; margin-right: 6px;
+  }
+  .corner {
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-start;
+    padding: 0 4px 6px;
+    font-size: 10px;
+    color: #94a3b8;
+  }
+  .role {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    font-size: 17px;
+    font-weight: 700;
+    color: #0f172a;
+  }
+  .role-dot { width: 8px; height: 8px; border-radius: 50%; background: #2563eb; }
+  .role.student .role-dot { background: #059669; }
+  .role.admin .role-dot { background: #7c3aed; }
+
+  .cell {
+    background: #ffffff;
+    border: 1px solid #eef2f7;
+    border-radius: 10px;
+    padding: 7px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .cell.empty { align-items: center; justify-content: center; color: #cbd5e1; font-size: 14px; }
+  .card {
+    border-radius: 9px;
+    padding: 8px 9px;
+    border: 1px solid;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .card.p0 { background: #eff6ff; border-color: #bfdbfe; }
+  .card.p1 { background: #fffbeb; border-color: #fde68a; }
+  .card.support { background: #f8fafc; border-color: #cbd5e1; border-style: dashed; }
+  .card-head { display: flex; align-items: flex-start; gap: 5px; }
+  .tag {
+    flex-shrink: 0;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 5px;
+    border-radius: 4px;
+    line-height: 1.2;
+    margin-top: 2px;
+  }
+  .tag.p0 { background: #dbeafe; color: #1d4ed8; }
+  .tag.p1 { background: #fef3c7; color: #b45309; }
+  .tag.support { background: #e2e8f0; color: #475569; }
+  .card-title { font-size: 18px; font-weight: 700; line-height: 1.25; color: #0f172a; }
+  .card.p0 .card-title { color: #1e3a8a; }
+  .card.p1 .card-title { color: #92400e; }
+  .card.support .card-title { color: #334155; }
+  .card-body { font-size: 13.5px; line-height: 1.45; color: #475569; }
+  .card.wide { flex: 1; justify-content: center; }
+  .span4 { grid-column: 2 / 6; }
+  .foot {
+    margin-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: #94a3b8;
+  }
+</style>
+</head>
+<body>
+<div class="canvas">
+  <div class="head">
+    <div>
+      <div class="title">AICoding考试平台 · 用户故事地图</div>
+      <div class="subtitle">横轴：考试流程 / 纵轴：角色泳道 / 颜色：优先级</div>
+    </div>
+    <div class="legend">
+      <span><i class="dot p0"></i>P0 主故事</span>
+      <span><i class="dot p1"></i>P1 后续 / 支撑</span>
+      <span><i class="dot support"></i>支撑活动</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="corner">角色 / 阶段</div>
+    <div class="stage"><span class="num">1</span>考试准备</div>
+    <div class="stage"><span class="num">2</span>作答</div>
+    <div class="stage"><span class="num">3</span>过程监控</div>
+    <div class="stage"><span class="num">4</span>判分与报告</div>
+
+    <div class="role"><span class="role-dot"></span>教师</div>
+    <div class="cell">
+      <div class="card p0">
+        <div class="card-head"><span class="tag p0">P0</span><span class="card-title">US-01 考试全流程创建与发布</span></div>
+        <div class="card-body">创建考试、选题、评分规则<br>Agent 行为策略（提示频率 / 追问）<br>一键发布，进入监控</div>
+      </div>
+    </div>
+    <div class="cell empty">—</div>
+    <div class="cell">
+      <div class="card p0">
+        <div class="card-head"><span class="tag p0">P0</span><span class="card-title">US-03 实时监控与异常预警</span></div>
+        <div class="card-body">在线 / 离线 / 提交状态<br>切屏、长时间无操作预警<br>查看考生详细交互</div>
+      </div>
+    </div>
+    <div class="cell">
+      <div class="card p1">
+        <div class="card-head"><span class="tag p1">P1</span><span class="card-title">复核成绩 / 申诉</span></div>
+        <div class="card-body">调整过程分、争议卷<br>复核申诉、留痕</div>
+      </div>
+    </div>
+
+    <div class="role student"><span class="role-dot"></span>学生</div>
+    <div class="cell">
+      <div class="card support">
+        <div class="card-head"><span class="tag support">支撑</span><span class="card-title">进入考试 / 环境自检</span></div>
+        <div class="card-body">容器就绪<br>网络 / 终端 / Agent 自检</div>
+      </div>
+    </div>
+    <div class="cell">
+      <div class="card p0">
+        <div class="card-head"><span class="tag p0">P0</span><span class="card-title">US-04 在线代码编辑与运行调试</span></div>
+        <div class="card-body">Monaco 编辑器、文件树<br>运行 / 调试、版本快照</div>
+      </div>
+      <div class="card p0">
+        <div class="card-head"><span class="tag p0">P0</span><span class="card-title">US-02 多轮对话式 Agent 引导</span></div>
+        <div class="card-body">分层提示、追问<br>对话 / 代码版本全程留痕</div>
+      </div>
+    </div>
+    <div class="cell empty">—</div>
+    <div class="cell">
+      <div class="card support">
+        <div class="card-head"><span class="tag support">支撑</span><span class="card-title">提交判分</span></div>
+        <div class="card-body">样例 / 隐藏测试<br>多次提交</div>
+      </div>
+      <div class="card p1">
+        <div class="card-head"><span class="tag p1">P1</span><span class="card-title">查看过程报告</span></div>
+        <div class="card-body">时间线、AI 对话<br>评分与改进建议</div>
+      </div>
+    </div>
+
+    <div class="role admin"><span class="role-dot"></span>管理员</div>
+    <div class="cell span4">
+      <div class="card support wide">
+        <div class="card-head"><span class="tag support">支撑</span><span class="card-title">账号 / 权限 / 镜像 / 审计 / 数据归档</span></div>
+        <div class="card-body">覆盖考试准备、作答、监控、判分全流程；负责账号与权限、镜像与资源、审计与数据导出。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>加粗卡片为本次 SRS 的四条主故事；其余为支撑活动或 P1 后续。</span>
+    <span>A10 组 · V1.0</span>
+  </div>
+</div>
+</body>
+</html>
