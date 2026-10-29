@@ -1,0 +1,91 @@
+# 清软论坛容器化部署编排
+#
+# 在 backend 目录下执行：
+#   docker compose up -d --build
+#
+# 服务拓扑：
+#   nginx ──(web_network)──> app ──(db_network)──> mysql
+#   nginx 与 mysql 不在同一个网络中，因此 nginx 容器无法访问数据库容器。
+#   只有 nginx 把端口映射到宿主机（8000），其余服务仅供容器间访问。
+
+services:
+  mysql:
+    image: mysql:8.1
+    container_name: mysql
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=2024013307
+      - MYSQL_DATABASE=thss
+      - TZ=Asia/Shanghai
+    # MySQL 镜像默认时区为 UTC、字符集为 latin1，这里统一调整为东八区与 utf8mb4，
+    # 否则中文标题与正文会出现乱码
+    command: ['mysqld', '--character-set-server=utf8mb4', '--collation-server=utf8mb4_unicode_ci']
+    volumes:
+      # 数据库文件持久化到宿主机，容器重建后数据不丢失
+      - /home/ubuntu/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - db_network
+
+  app:
+    build:
+      # 构建上下文为仓库根目录，这样 Dockerfile 才能同时拿到 frontend/ 与 backend/
+      context: ..
+      dockerfile: backend/Dockerfile
+      target: app
+    container_name: app
+    restart: always
+    # 必须显式指定 DJANGO_SETTINGS_MODULE：app/wsgi.py 里用的是
+    # os.environ.setdefault(...)，若不设置则会退回测试用的 app.settings
+    # （SQLite 数据库），导致后端连不上 MySQL 而不会报错
+    environment:
+      - DJANGO_SETTINGS_MODULE=app.settings_prod
+    # 等 MySQL 健康检查通过（数据库完成初始化）之后再启动，避免连接被拒绝
+    depends_on:
+      mysql:
+        condition: service_healthy
+    # 按「部署」章节的指引：先做数据库迁移，再用 Gunicorn 启动应用。
+    # 仓库里没有迁移文件（backend/.gitignore 忽略了 **/migrations/*.py），
+    # 因此必须先 makemigrations 才能建表
+    command: >
+      bash -c "export DJANGO_SETTINGS_MODULE=app.settings_prod &&
+      python manage.py makemigrations app user &&
+      python manage.py migrate &&
+      exec gunicorn -w4 -b 0.0.0.0:8000 --log-level=debug app.wsgi"
+    expose:
+      - "8000"
+    networks:
+      # 同时接入两个网络：既能接收 Nginx 的请求，又能连接数据库
+      - web_network
+      - db_network
+
+  nginx:
+    # 使用 latest 版本的 Nginx；构建产物同样打成这个 tag，
+    # 因此部署时必须带 --build（docker compose up -d --build），
+    # 否则可能直接复用本地的同名镜像而跳过构建
+    image: nginx:latest
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      target: nginx
+    container_name: nginx
+    restart: always
+    depends_on:
+      - app
+    ports:
+      # 仅此服务对外暴露端口，宿主机 8000 -> 容器 8000
+      - "8000:8000"
+    networks:
+      - web_network
+
+networks:
+  # Nginx 与后端应用之间的网络
+  web_network:
+    driver: bridge
+  # 后端应用与数据库之间的网络，Nginx 不在此网络中
+  db_network:
+    driver: bridge

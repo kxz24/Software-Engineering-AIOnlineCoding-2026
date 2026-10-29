@@ -1,0 +1,15 @@
+{
+  "short_name": "清软论坛",
+  "name": "清软论坛",
+  "icons": [
+    {
+      "src": "icon32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#ffffff"
+}
