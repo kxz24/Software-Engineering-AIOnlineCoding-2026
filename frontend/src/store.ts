@@ -1,5 +1,5 @@
-import {configureStore, createSlice, PayloadAction} from "@reduxjs/toolkit";
-import {UserSelf} from "./backend";
+import { configureStore, createSlice, PayloadAction } from "@reduxjs/toolkit";
+import { UserSelf } from "./api/client";
 
 export interface Store {
     /** 当前登录用户，未登录为 null */
@@ -9,7 +9,7 @@ export interface Store {
 }
 
 /**
- * 当前用户信息。登录后由 UserBarInfo 拉取并写入。
+ * 当前用户信息。登录成功后写入，并可用 GET /api/v1/user 刷新。
  */
 export const userSlice = createSlice({
     name: "user",
@@ -26,7 +26,7 @@ export const userSlice = createSlice({
  */
 export const tokenSlice = createSlice({
     name: "token",
-    initialState: localStorage.getItem("token"),
+    initialState: localStorage.getItem("token") as (string | null),
     reducers: {
         setToken(state: string | null, action: PayloadAction<string | null>) {
             if (action.payload != null) {
