@@ -1,0 +1,176 @@
+/* ============================================================
+ * 应用层布局修正
+ * 原型是 1440×900 的静态画布，接入真实路由后改为自适应视口：
+ * 宽度跟随窗口、高度撑满一屏、内容区自行滚动。
+ * ============================================================ */
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background: #eef2f7;
+}
+
+/* 页面根容器：去掉固定画布尺寸 */
+.app,
+.student-page,
+.teacher-shell,
+.login-page {
+  width: auto;
+  height: 100%;
+  overflow: visible;
+}
+
+/* ---------- 学生端 ---------- */
+.student-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.student-content {
+  width: 1180px;
+  max-width: calc(100vw - 48px);
+  margin: 0 auto;
+  padding: 22px 0 40px;
+  flex: 1;
+}
+
+.student-nav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+/* ---------- 教师端 ---------- */
+.teacher-shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.teacher-sidebar {
+  display: flex;
+  flex-direction: column;
+}
+
+.teacher-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.teacher-content {
+  overflow: auto;
+}
+
+/* ---------- 登录页 ---------- */
+.login-page {
+  min-height: 100vh;
+}
+
+/* ---------- 做题工作台 ---------- */
+.wb-root .canvas {
+  width: 100%;
+  height: 100vh;
+}
+
+/* ---------- 交互与表单细节 ---------- */
+a.btn,
+span.btn,
+a.icon-btn,
+span.icon-btn,
+a.side-link,
+a.nav-link,
+.btn,
+.icon-btn,
+.tab,
+.tab-pill {
+  cursor: pointer;
+  user-select: none;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+  color: #334155;
+  background: #fff;
+  outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #93b4f8;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .08);
+}
+
+input::placeholder {
+  color: #a8b3c2;
+}
+
+/* ---------- 滚动条 ---------- */
+.teacher-content::-webkit-scrollbar,
+.student-page::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.teacher-content::-webkit-scrollbar-thumb,
+.student-page::-webkit-scrollbar-thumb {
+  background: #d7dee8;
+  border-radius: 4px;
+}
+
+/* ---------- 登录页提示 ---------- */
+.login-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 10.5px;
+  margin-bottom: 12px;
+}
+
+.login-card input.input {
+  width: 100%;
+}
+
+.login-card button.btn-block {
+  width: 100%;
+  border: none;
+}
+
+.check-row {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 演示模式入口（仅开发环境显示，接入真实接口后可删除） */
+.demo-entry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #e2e8f0;
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+/* ---------- 通用动画 ---------- */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.fade-in {
+  animation: fade-in .18s ease-out;
+}

@@ -1,0 +1,380 @@
+/* 做题工作台样式（作用域限定在 .wb-root 之内，避免与公共设计系统冲突） */
+
+
+  .wb-root .canvas {
+    width: 1440px;
+    height: 900px;
+    background: #f5f7fb;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+/* ---------- 顶部栏 ---------- */
+  .wb-root .topbar {
+    height: 60px;
+    background: #ffffff;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    flex-shrink: 0;
+  }
+  .wb-root .topbar-left { display: flex; align-items: center; gap: 12px; }
+  .wb-root .brand { display: flex; align-items: center; gap: 9px; }
+  .wb-root .logo {
+    width: 30px; height: 30px; border-radius: 9px;
+    background: #2563eb;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .wb-root .brand-name { font-size: 15px; font-weight: 700; letter-spacing: .2px; color: #0f172a; }
+  .wb-root .divider-v { width: 1px; height: 20px; background: #e2e8f0; margin: 0 4px; }
+  .wb-root .exam-name { font-size: 13px; font-weight: 600; color: #334155; }
+
+  .wb-root .topbar-right { display: flex; align-items: center; gap: 10px; }
+  .wb-root .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 10px; border-radius: 7px;
+    font-size: 12px; font-weight: 500;
+  }
+  .wb-root .chip-ai { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+  .wb-root .chip-timer {
+    background: #f8fafc; color: #0f172a; border: 1px solid #e2e8f0;
+    font-variant-numeric: tabular-nums; font-weight: 600;
+  }
+  .wb-root .save-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #64748b; }
+  .wb-root .dot { width: 6px; height: 6px; border-radius: 50%; background: #059669; }
+  .wb-root .btn-submit {
+    height: 34px; padding: 0 14px; border-radius: 8px;
+    background: #2563eb; color: #ffffff; border: none;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; font-weight: 600;
+  }
+  .wb-root .btn-submit .sub { font-size: 11px; font-weight: 500; opacity: .85; }
+  .wb-root .avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: #e0e7ff; color: #3730a3;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+  }
+
+/* ---------- 考试信息条 ---------- */
+  .wb-root .metabar {
+    height: 38px; background: #ffffff;
+    border-bottom: 1px solid #eef2f7;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 20px; flex-shrink: 0;
+  }
+  .wb-root .metabar-left { display: flex; align-items: center; gap: 9px; font-size: 12px; color: #64748b; }
+  .wb-root .task-name { color: #334155; font-weight: 600; }
+  .wb-root .meta-chip {
+    height: 22px; padding: 0 8px; border-radius: 5px;
+    background: #f1f5f9; color: #475569;
+    font-size: 11px; display: inline-flex; align-items: center; gap: 5px;
+  }
+  .wb-root .meta-chip.green { background: #ecfdf5; color: #047857; }
+  .wb-root .meta-chip.blue { background: #eff6ff; color: #1d4ed8; }
+  .wb-root .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
+  .wb-root .metabar-right { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #94a3b8; }
+  .wb-root .metabar-right .link { color: #2563eb; font-weight: 500; }
+  .wb-root .divider-dot { color: #cbd5e1; }
+
+/* ---------- 主区域 ---------- */
+  .wb-root .main { display: flex; flex: 1; min-height: 0; }
+
+/* ---------- 左侧文件树 ---------- */
+  .wb-root .sidebar-left {
+    width: 240px; background: #ffffff;
+    border-right: 1px solid #e2e8f0;
+    display: flex; flex-direction: column; flex-shrink: 0;
+  }
+  .wb-root .panel-head {
+    height: 46px; padding: 0 14px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid #eef2f7; flex-shrink: 0;
+  }
+  .wb-root .panel-title { font-size: 12px; font-weight: 600; color: #475569; letter-spacing: .4px; }
+  .wb-root .icon-btn {
+    width: 26px; height: 26px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    color: #64748b;
+  }
+  .wb-root .section-label {
+    padding: 12px 14px 5px; font-size: 10.5px; font-weight: 600;
+    color: #94a3b8; letter-spacing: .6px;
+  }
+  .wb-root .tree { padding: 0 8px; }
+  .wb-root .tree-row {
+    height: 30px; display: flex; align-items: center; gap: 6px;
+    padding: 0 8px; border-radius: 6px;
+    font-size: 12.5px; color: #334155;
+  }
+  .wb-root .tree-row.lv2 { padding-left: 26px; }
+  .wb-root .tree-row.lv3 { padding-left: 44px; }
+  .wb-root .tree-row.root { font-weight: 600; color: #1e293b; }
+  .wb-root .tree-row.active { background: #eff6ff; color: #1d4ed8; font-weight: 600; }
+  .wb-root .folder-ico { color: #d97706; }
+  .wb-root .file-ico { color: #94a3b8; }
+  .wb-root .tree-row.active .file-ico { color: #2563eb; }
+  .wb-root .modified-dot { width: 6px; height: 6px; border-radius: 50%; background: #f59e0b; margin-left: auto; }
+
+  .wb-root .left-bottom { margin-top: auto; border-top: 1px solid #eef2f7; padding: 12px 14px 14px; }
+  .wb-root .timeline-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .wb-root .timeline-title { font-size: 11px; font-weight: 600; color: #64748b; }
+  .wb-root .timeline-link { font-size: 10.5px; color: #2563eb; }
+  .wb-root .timeline-item { display: flex; gap: 9px; padding: 5px 0; }
+  .wb-root .tl-dot { width: 7px; height: 7px; border-radius: 50%; background: #cbd5e1; margin-top: 5px; flex-shrink: 0; }
+  .wb-root .tl-dot.blue { background: #2563eb; }
+  .wb-root .tl-dot.red { background: #ef4444; }
+  .wb-root .tl-text { font-size: 11.5px; color: #475569; line-height: 1.45; }
+  .wb-root .tl-time { font-size: 10px; color: #a8b3c2; margin-top: 1px; }
+
+/* ---------- 中间区域 ---------- */
+  .wb-root .center { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #f5f7fb; }
+
+/* 题目面板 */
+  .wb-root .problem {
+    height: 220px; background: #ffffff;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex; flex-direction: column; flex-shrink: 0;
+  }
+  .wb-root .tabs {
+    height: 40px; display: flex; align-items: flex-end; gap: 22px;
+    padding: 0 18px; border-bottom: 1px solid #eef2f7; flex-shrink: 0;
+  }
+  .wb-root .tab {
+    height: 40px; display: flex; align-items: center;
+    font-size: 12.5px; color: #64748b;
+    border-bottom: 2px solid transparent;
+  }
+  .wb-root .tab.active { color: #1d4ed8; font-weight: 600; border-bottom-color: #2563eb; }
+  .wb-root .tab-count {
+    margin-left: 5px; height: 17px; min-width: 17px; padding: 0 4px;
+    border-radius: 5px; background: #f1f5f9; color: #64748b;
+    font-size: 10px; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .wb-root .tabs-right { margin-left: auto; height: 40px; display: flex; align-items: center; font-size: 11px; color: #a8b3c2; }
+  .wb-root .problem-body { padding: 12px 18px; overflow: hidden; }
+  .wb-root .problem-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .wb-root .problem-title { font-size: 15px; font-weight: 700; color: #0f172a; }
+  .wb-root .badges { display: flex; gap: 6px; flex-shrink: 0; }
+  .wb-root .badge {
+    height: 20px; padding: 0 7px; border-radius: 5px;
+    font-size: 10.5px; display: inline-flex; align-items: center;
+  }
+  .wb-root .badge.gray { background: #f1f5f9; color: #475569; }
+  .wb-root .badge.blue { background: #eff6ff; color: #1d4ed8; }
+  .wb-root .badge.green { background: #ecfdf5; color: #047857; }
+  .wb-root .problem-desc { margin: 7px 0 0; font-size: 12px; line-height: 1.65; color: #475569; }
+  .wb-root .problem-desc strong { color: #334155; }
+  .wb-root .rule-line { margin: 6px 0 0; font-size: 12px; line-height: 1.65; color: #475569; }
+  .wb-root .rule-line .label { color: #334155; font-weight: 600; }
+  .wb-root code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 11px; background: #f1f5f9; color: #334155;
+    padding: 1px 4px; border-radius: 3px;
+  }
+  .wb-root .ai-note {
+    margin-top: 8px; display: flex; align-items: flex-start; gap: 7px;
+    background: #fffbeb; border: 1px solid #fde68a;
+    border-radius: 7px; padding: 6px 9px;
+    font-size: 11px; line-height: 1.55; color: #92400e;
+  }
+
+/* 编辑器 */
+  .wb-root .editor {
+    flex: 1; min-height: 0; background: #ffffff;
+    display: flex; flex-direction: column;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .wb-root .editor-tabs {
+    height: 38px; display: flex; align-items: stretch;
+    border-bottom: 1px solid #eef2f7;
+    background: #fbfcfe; flex-shrink: 0;
+  }
+  .wb-root .editor-tab {
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 13px; font-size: 12px; color: #475569;
+    border-right: 1px solid #eef2f7;
+  }
+  .wb-root .editor-tab.active {
+    background: #ffffff; color: #0f172a; font-weight: 600;
+    border-top: 2px solid #2563eb;
+  }
+  .wb-root .editor-tab .close { color: #94a3b8; font-size: 14px; line-height: 1; margin-left: 2px; }
+  .wb-root .editor-tab .modified-dot { margin-left: 2px; }
+  .wb-root .editor-actions {
+    margin-left: auto; display: flex; align-items: center; gap: 12px;
+    padding: 0 14px; font-size: 10.5px; color: #94a3b8;
+  }
+  .wb-root .editor-actions .ok { color: #059669; }
+  .wb-root .editor-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+  .wb-root .gutter {
+    width: 46px; background: #fbfcfe;
+    border-right: 1px solid #eef2f7;
+    padding-top: 8px; flex-shrink: 0;
+  }
+  .wb-root .gutter div {
+    height: 20px; font-size: 10.5px; color: #a8b3c2;
+    text-align: right; padding-right: 10px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  .wb-root .code-area { flex: 1; padding-top: 8px; overflow: hidden; }
+  .wb-root .code-line {
+    height: 20px; display: flex;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 11.5px; line-height: 20px;
+    white-space: pre;
+  }
+  .wb-root .code-line.highlight { background: #f5f9ff; }
+  .wb-root .code-line .code { padding-left: 12px; }
+  .wb-root .k { color: #7c3aed; }
+  .wb-root .fn { color: #2563eb; }
+  .wb-root .str { color: #059669; }
+  .wb-root .cm { color: #94a3b8; font-style: italic; }
+  .wb-root .dec { color: #c026d3; }
+
+/* 终端 */
+  .wb-root .terminal { height: 184px; background: #ffffff; display: flex; flex-direction: column; flex-shrink: 0; }
+  .wb-root .terminal-head {
+    height: 36px; display: flex; align-items: center; gap: 18px;
+    padding: 0 16px; border-bottom: 1px solid #eef2f7; flex-shrink: 0;
+  }
+  .wb-root .terminal-title { font-size: 11.5px; font-weight: 600; color: #334155; display: flex; align-items: center; gap: 6px; }
+  .wb-root .terminal-tab { font-size: 11px; color: #64748b; }
+  .wb-root .terminal-tab.active { color: #1d4ed8; font-weight: 600; }
+  .wb-root .terminal-clear { margin-left: auto; }
+  .wb-root .terminal-body {
+    flex: 1; padding: 8px 16px 6px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 11px; line-height: 17px;
+    background: #fbfcfe; overflow: hidden;
+  }
+  .wb-root .term-line { white-space: pre; }
+  .wb-root .term-prompt { color: #2563eb; font-weight: 600; }
+  .wb-root .term-ok { color: #047857; }
+  .wb-root .term-fail { color: #b91c1c; }
+  .wb-root .term-muted { color: #64748b; }
+  .wb-root .term-dim { color: #94a3b8; }
+
+/* ---------- 右侧 Agent ---------- */
+  .wb-root .agent {
+    width: 380px; background: #ffffff;
+    border-left: 1px solid #e2e8f0;
+    display: flex; flex-direction: column; flex-shrink: 0;
+  }
+  .wb-root .agent-head {
+    height: 54px; padding: 0 16px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid #eef2f7; flex-shrink: 0;
+  }
+  .wb-root .agent-brand { display: flex; align-items: center; gap: 9px; }
+  .wb-root .agent-logo {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: #f5f3ff; color: #7c3aed;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .wb-root .agent-name { font-size: 13px; font-weight: 700; color: #0f172a; }
+  .wb-root .agent-sub { font-size: 10px; color: #94a3b8; margin-top: 1px; }
+  .wb-root .agent-head-actions { display: flex; align-items: center; gap: 4px; }
+  .wb-root .mode-chip {
+    height: 22px; padding: 0 8px; border-radius: 5px;
+    background: #fffbeb; color: #b45309; border: 1px solid #fde68a;
+    font-size: 10px; font-weight: 600;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .wb-root .context-bar {
+    padding: 8px 14px; border-bottom: 1px solid #eef2f7;
+    display: flex; align-items: center; gap: 6px;
+    flex-shrink: 0; flex-wrap: wrap;
+  }
+  .wb-root .ctx-label { font-size: 10px; color: #94a3b8; }
+  .wb-root .ctx-chip {
+    height: 22px; padding: 0 7px; border-radius: 5px;
+    background: #f1f5f9; color: #475569;
+    font-size: 10px; display: flex; align-items: center; gap: 5px;
+  }
+  .wb-root .ctx-add {
+    height: 22px; padding: 0 7px; border-radius: 5px;
+    border: 1px dashed #cbd5e1; color: #64748b;
+    font-size: 10px; display: flex; align-items: center; gap: 4px;
+    background: #ffffff;
+  }
+  .wb-root .chat { flex: 1; min-height: 0; padding: 12px 14px; overflow: hidden; }
+  .wb-root .msg-user { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+  .wb-root .msg-user .bubble {
+    max-width: 300px; background: #eff6ff; color: #1e3a8a;
+    border: 1px solid #dbeafe;
+    border-radius: 10px 10px 3px 10px;
+    padding: 8px 11px; font-size: 12px; line-height: 1.6;
+  }
+  .wb-root .msg-agent { margin-bottom: 10px; }
+  .wb-root .agent-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .wb-root .agent-meta .name { font-size: 10.5px; font-weight: 700; color: #6d28d9; }
+  .wb-root .agent-meta .time { font-size: 9.5px; color: #a8b3c2; }
+  .wb-root .agent-card {
+    background: #fbfbfe; border: 1px solid #ede9fe;
+    border-radius: 9px; padding: 9px 11px;
+  }
+  .wb-root .agent-card p { margin: 0 0 4px; font-size: 11px; line-height: 1.55; color: #334155; }
+  .wb-root .agent-card p:last-child { margin-bottom: 0; }
+  .wb-root .diff-box {
+    background: #f8fafc; border: 1px solid #e2e8f0;
+    border-radius: 6px; padding: 5px 8px; margin-top: 5px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 9.5px; line-height: 1.6; white-space: pre; overflow: hidden;
+  }
+  .wb-root .diff-del { color: #b91c1c; background: #fef2f2; display: block; }
+  .wb-root .diff-add { color: #047857; background: #ecfdf5; display: block; }
+  .wb-root .code-box {
+    background: #f8fafc; border: 1px solid #e2e8f0;
+    border-radius: 6px; padding: 5px 8px; margin-top: 5px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 9px; line-height: 1.6; white-space: pre; overflow: hidden;
+    color: #334155;
+  }
+  .wb-root .card-actions { display: flex; align-items: center; gap: 7px; margin-top: 8px; }
+  .wb-root .btn-mini {
+    height: 25px; padding: 0 8px; border-radius: 6px;
+    font-size: 10px; display: inline-flex; align-items: center; gap: 4px;
+    border: 1px solid #e2e8f0; background: #ffffff; color: #475569;
+  }
+  .wb-root .btn-mini.primary { background: #f5f3ff; border-color: #ddd6fe; color: #6d28d9; font-weight: 600; }
+  .wb-root .btn-mini.disabled { background: #f8fafc; color: #a8b3c2; border-color: #eef2f7; }
+  .wb-root .card-foot { margin-top: 6px; font-size: 9.5px; color: #a8b3c2; display: flex; align-items: center; gap: 4px; }
+
+  .wb-root .agent-input-wrap {
+    border-top: 1px solid #eef2f7; padding: 8px 14px 9px;
+    flex-shrink: 0; background: #ffffff;
+  }
+  .wb-root .agent-input {
+    border: 1px solid #dbe2ea; border-radius: 10px;
+    padding: 7px 10px 5px; background: #ffffff;
+  }
+  .wb-root .agent-input .placeholder { font-size: 11.5px; color: #a8b3c2; line-height: 1.5; }
+  .wb-root .input-toolbar { display: flex; align-items: center; justify-content: space-between; margin-top: 5px; }
+  .wb-root .input-tools { display: flex; align-items: center; gap: 10px; color: #94a3b8; }
+  .wb-root .input-hint { font-size: 9.5px; color: #a8b3c2; }
+  .wb-root .send-btn {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: #7c3aed; color: #ffffff; border: none;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .wb-root .agent-foot {
+    margin-top: 5px; font-size: 9.5px; color: #a8b3c2;
+    display: flex; align-items: center; gap: 5px;
+  }
+
+/* ---------- 底部状态栏 ---------- */
+  .wb-root .statusbar {
+    height: 28px; background: #fbfcfe;
+    border-top: 1px solid #e2e8f0;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 16px; font-size: 10px; color: #94a3b8;
+    flex-shrink: 0;
+  }
+  .wb-root .status-left, .wb-root .status-right { display: flex; align-items: center; gap: 14px; }
+  .wb-root .status-item { display: flex; align-items: center; gap: 5px; }
+  .wb-root .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
+

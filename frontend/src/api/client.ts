@@ -1,8 +1,5 @@
-import {Urls} from "./urls";
-import {Strings, translate} from "./strings";
-import {Dispatch} from "react";
-import {tokenSlice, userSlice} from "./store";
-import {Role} from "./roles";
+import { Urls } from "./urls";
+import { Role } from "../roles";
 
 /** 当前登录用户的信息 */
 export interface UserSelf {
@@ -24,7 +21,7 @@ export interface LoginResult {
 
 export type LoginResponse =
     | ({ success: true } & LoginResult)
-    | { success: false, message: string };
+    | { success: false; message: string };
 
 export type UserResponse =
     | { success: true, user: UserSelf }
@@ -42,7 +39,7 @@ async function readJson(response: Response): Promise<any> {
     try {
         return await response.json();
     } catch (e) {
-        return {"message": Strings["api/illegal_json"]};
+        return { "message": "服务返回了非预期的内容，请稍后重试。" };
     }
 }
 
@@ -57,17 +54,14 @@ export async function login(username: string, password: string): Promise<LoginRe
         "headers": {
             "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-            "username": username,
-            "password": password,
-        })
+        body: JSON.stringify({ username, password })
     });
     const json = await readJson(response);
 
     if (response.status !== 200 || json.jwt == null || json.role == null) {
         return {
             "success": false,
-            "message": translate(json.message || Strings["api/unknown_error"]),
+            "message": json.message || "账号或密码不正确。",
         };
     }
 
@@ -85,9 +79,8 @@ export async function login(username: string, password: string): Promise<LoginRe
 /**
  * 登出。
  * 后端为无状态 JWT，这里只负责清掉本地令牌。
- * 传入 dispatch 时同时清理 Redux 状态。
  */
-export async function logout(dispatch?: Dispatch<any>): Promise<LogoutResponse> {
+export async function logout(): Promise<LogoutResponse> {
     const response = await fetch(Urls.logout, {
         "method": "PATCH",
         "mode": "cors",
@@ -96,27 +89,18 @@ export async function logout(dispatch?: Dispatch<any>): Promise<LogoutResponse> 
         }
     });
     const json = await readJson(response);
-
-    if (dispatch) {
-        dispatch(userSlice.actions.updateUserStatus(null));
-        dispatch(tokenSlice.actions.setToken(null));
-    } else {
-        removeToken();
-    }
+    removeToken();
 
     if (response.status !== 200) {
-        return {
-            "success": false,
-            "message": translate(json.message || Strings["api/unknown_error"]),
-        };
+        return { "success": false, "message": json.message || "登出失败。" };
     }
-    return {"success": true};
+    return { "success": true };
 }
 
 /**
  * 获取当前登录用户信息（含角色）。
  */
-export async function user(): Promise<UserResponse> {
+export async function fetchUser(): Promise<UserResponse> {
     const response = await fetch(Urls.user, {
         "method": "GET",
         "mode": "cors",
@@ -129,14 +113,11 @@ export async function user(): Promise<UserResponse> {
     if (response.status !== 200) {
         return {
             "success": false,
-            "authorized": (response.status !== 401),
-            "message": translate(json.message || Strings["api/unknown_error"]),
+            "authorized": response.status !== 401,
+            "message": json.message || "获取用户信息失败。",
         };
     }
-    return {
-        "success": true,
-        "user": json,
-    };
+    return { "success": true, "user": json };
 }
 
 /** 是否已持有令牌 */
@@ -154,7 +135,8 @@ export function setToken(token: string) {
     localStorage.setItem("token", token);
 }
 
-/** 清除令牌 */
+/** 清除令牌（同时清掉演示模式写入的本地用户） */
 export function removeToken() {
     localStorage.removeItem("token");
+    localStorage.removeItem("demoUser");
 }
