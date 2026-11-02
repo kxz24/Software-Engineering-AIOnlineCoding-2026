@@ -4,6 +4,7 @@
   "private": true,
   "dependencies": {
     "@reduxjs/toolkit": "^1.4.0",
+    "monaco-editor": "^0.52.2",
     "normalize.css": "^8.0.1",
     "react": "^16.13.1",
     "react-dom": "^16.13.1",
@@ -27,6 +28,7 @@
     "build:linux:darwin": "NODE_OPTIONS=--openssl-legacy-provider react-scripts build",
     "build:default": "set NODE_OPTIONS=--openssl-legacy-provider && react-scripts build",
     "test": "react-scripts test",
+    "postinstall": "node scripts/copy-monaco.js",
     "eject": "react-scripts eject"
   },
   "proxy": "http://127.0.0.1:8000",
