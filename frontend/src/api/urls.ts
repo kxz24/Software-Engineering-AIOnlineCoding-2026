@@ -4,6 +4,7 @@
  * 部署后由 Nginx 把 /api/v1 转发到后端容器。
  */
 export const Urls = {
+    register: "/api/v1/register", // POST
     login: "/api/v1/login", // PATCH
     logout: "/api/v1/logout", // PATCH
     user: "/api/v1/user", // GET
@@ -18,6 +19,7 @@ export const Urls = {
  */
 export const Routes = {
     login: "/login",
+    register: "/register",
 
     examList: "/exams",
     examPrecheck: (examId: string | number) => `/exams/${examId}/precheck`,

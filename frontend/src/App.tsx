@@ -6,6 +6,7 @@ import { fetchUser, isAuthenticated } from "./api/client";
 import { Routes } from "./api/urls";
 import { roleHome } from "./roles";
 import { LoginPage } from "./pages/LoginPage";
+import { RegisterPage } from "./pages/RegisterPage";
 import { ExamListPage } from "./pages/student/ExamListPage";
 import { PrecheckPage } from "./pages/student/PrecheckPage";
 import { WorkbenchPage } from "./pages/student/WorkbenchPage";
@@ -94,6 +95,7 @@ export function App() {
         <ToastHost/>
         <Switch>
             <Route exact path={Routes.login} component={LoginPage}/>
+            <Route exact path={Routes.register} component={RegisterPage}/>
             <Route exact path="/" component={HomeRedirect}/>
 
             <Route exact path={Routes.examList}

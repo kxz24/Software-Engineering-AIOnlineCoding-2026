@@ -21,7 +21,14 @@ npm test -- --watchAll=false  # 页面冒烟测试（src/pages.smoke.test.tsx）
 ```
 
 开发服务器通过 `package.json` 里的 `proxy` 把 `/api/v1/*` 转发到 `http://127.0.0.1:8000`，
-所以本地联调时先启动后端。
+所以本地联调时先启动后端：
+
+```bash
+cd backend
+python manage.py makemigrations user   # 迁移文件被 backend/.gitignore 忽略，需各自本地生成
+python manage.py migrate
+python manage.py runserver 127.0.0.1:8000
+```
 
 > Node.js 18+。脚本里已带 `--openssl-legacy-provider`，用于兼容较新的 Node 版本。
 
@@ -29,12 +36,13 @@ npm test -- --watchAll=false  # 页面冒烟测试（src/pages.smoke.test.tsx）
 
 ```text
 src/
-├── api/           后端接口（client.ts：登录 / 登出 / 当前用户；urls.ts：接口与路由常量）
+├── api/           后端接口（client.ts：注册 / 登录 / 登出 / 当前用户；urls.ts：接口与路由常量）
 ├── components/    公共组件（Brand、Icon、Toast）
 ├── layouts/       两端外壳：StudentLayout（顶部导航）、TeacherLayout（侧边栏 + 顶栏）
 ├── mock/          演示数据（接口未就绪时页面从这里取数）
 ├── pages/         页面
 │   ├── LoginPage.tsx
+│   ├── RegisterPage.tsx
 │   ├── student/   02 我的考试、03 考试须知、04 做题工作台、05 提交结果、06 成绩报告
 │   └── teacher/   07 考试管理、08 创建考试、09 题目配置、10 监考中心
 ├── styles/        prototype.css（设计系统）、workbench.css（工作台，作用域 .wb-root）、app.css（布局自适应）
@@ -47,6 +55,7 @@ src/
 | 原型页 | 路由 | 角色 |
 | --- | --- | --- |
 | 01 登录 | `/login` | — |
+| （原型外补充）注册 | `/register` | — |
 | 02 我的考试 | `/exams` | 学生 |
 | 03 考试须知 | `/exams/:examId/precheck` | 学生 |
 | 04 做题工作台 | `/exams/:examId/workbench` | 学生 |
@@ -58,6 +67,7 @@ src/
 | 10 监考中心 | `/manage/:examId/proctor` | 教师 / 管理员 |
 
 登录成功后按账号在后台记录的角色跳转：学生进 `/exams`，教师与管理员进 `/manage`。
+注册成功即视为登录，同样按角色跳转；注册页开放「学生 / 教师」两种角色，管理员由后台分配。
 
 ## 演示模式（临时）
 
@@ -70,10 +80,11 @@ src/
 
 ## 与后端的关系
 
-目前后端只提供三个接口：
+目前后端提供四个接口：
 
 | 接口 | 方法 | 说明 |
 | --- | --- | --- |
+| `/api/v1/register` | POST | 注册（用户名 / 密码 / 姓名 / 角色），成功即返回 JWT |
 | `/api/v1/login` | PATCH | 登录，返回 JWT 与角色 |
 | `/api/v1/logout` | PATCH | 登出（无状态，仅清本地令牌） |
 | `/api/v1/user` | GET | 当前登录用户信息 |

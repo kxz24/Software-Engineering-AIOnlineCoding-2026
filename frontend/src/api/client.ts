@@ -31,6 +31,9 @@ export type LogoutResponse =
     | { success: true }
     | { success: false, message: string };
 
+/** 注册接口与登录返回同样的载荷（注册即登录），复用同一类型 */
+export type RegisterResponse = LoginResponse;
+
 /**
  * 读取响应体 JSON。服务端返回非 JSON 时退化为一个带错误信息的对象，
  * 避免 JSON.parse 抛异常导致界面卡死。
@@ -62,6 +65,44 @@ export async function login(username: string, password: string): Promise<LoginRe
         return {
             "success": false,
             "message": json.message || "账号或密码不正确。",
+        };
+    }
+
+    setToken(json.jwt);
+    return {
+        "success": true,
+        "jwt": json.jwt,
+        "userId": json.userId,
+        "username": json.username,
+        "nickname": json.nickname,
+        "role": json.role,
+    };
+}
+
+/**
+ * 注册。
+ * 后端在注册成功时直接下发 JWT（注册即登录），这里同样写入 localStorage。
+ */
+export async function register(
+    username: string,
+    password: string,
+    nickname: string,
+    role: Role
+): Promise<RegisterResponse> {
+    const response = await fetch(Urls.register, {
+        "method": "POST",
+        "mode": "cors",
+        "headers": {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ username, password, nickname, role })
+    });
+    const json = await readJson(response);
+
+    if (response.status !== 201 || json.jwt == null || json.role == null) {
+        return {
+            "success": false,
+            "message": json.message || "注册失败，请稍后重试。",
         };
     }
 

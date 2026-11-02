@@ -4,6 +4,7 @@ import { useHistory, useLocation } from "react-router-dom";
 import { Brand } from "../components/Brand";
 import { Icon } from "../components/Icon";
 import { login } from "../api/client";
+import { Routes } from "../api/urls";
 import { tokenSlice, userSlice } from "../store";
 import { Role, roleHome, Roles } from "../roles";
 import { demoHome, DemoEnabled, enterDemo } from "../demo";
@@ -150,6 +151,9 @@ export function LoginPage() {
                         {submitting ? "登录中…" : "登录"}
                     </button>
 
+                    <div className="login-note">
+                        没有账号？<span className="link" onClick={() => history.push(Routes.register)}>立即注册</span>
+                    </div>
                     <div className="login-note">
                         当前身份：{Roles[identity].label} · {IdentityHints[identity]}
                     </div>
