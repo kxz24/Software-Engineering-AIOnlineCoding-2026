@@ -6,6 +6,7 @@ AI Coding 在线编程考试平台的前端，按 `docs/prototype/本地预览�
 
 - TypeScript 3.9 + React 16（Create React App / react-scripts 3.4.3）
 - react-router-dom 5 管理路由，`@reduxjs/toolkit` + react-redux 管理登录状态
+- Monaco Editor 在线代码编辑（静态资源本地加载，不走 CDN）
 - 样式为原型中提取的纯 CSS 设计系统（`src/styles/`），不引入组件库
 
 ## 启动
@@ -32,12 +33,16 @@ python manage.py runserver 127.0.0.1:8000
 
 > Node.js 18+。脚本里已带 `--openssl-legacy-provider`，用于兼容较新的 Node 版本。
 
+Monaco Editor 的运行时资源不进仓库：`npm install` 时 `postinstall` 钩子
+（`scripts/copy-monaco.js`）会把 `node_modules/monaco-editor/min/vs` 复制到
+`public/monaco-vs`（已加入 .gitignore），页面加载与生产构建都使用这份本地资源。
+
 ## 目录结构
 
 ```text
 src/
 ├── api/           后端接口（client.ts：注册 / 登录 / 登出 / 当前用户；urls.ts：接口与路由常量）
-├── components/    公共组件（Brand、Icon、Toast）
+├── components/    公共组件（Brand、Icon、Toast、CodeEditor=Monaco 封装）
 ├── layouts/       两端外壳：StudentLayout（顶部导航）、TeacherLayout（侧边栏 + 顶栏）
 ├── mock/          演示数据（接口未就绪时页面从这里取数）
 ├── pages/         页面
@@ -69,6 +74,14 @@ src/
 登录成功后按账号在后台记录的角色跳转：学生进 `/exams`，教师与管理员进 `/manage`。
 注册成功即视为登录，同样按角色跳转；注册页开放「学生 / 教师」两种角色，管理员由后台分配。
 
+## 做题工作台（04）
+
+- 代码区为 Monaco Editor：Python / C / C++ / Java 等语言语法高亮，编辑器右上角
+  可切换当前文件的高亮语言（默认按文件扩展名自动推断）
+- 多文件标签共用一个编辑器实例，切换文件时保留各文件的撤销历史与光标位置
+- 代码草稿按考试自动保存到浏览器 `localStorage`（约 0.8s 防抖），刷新页面不丢失；
+  后端保存接口就绪后替换为服务端保存
+
 ## 演示模式（临时）
 
 后端只有登录接口，本地库还需要先建表建号。为了方便只看界面，登录页底部在
@@ -95,5 +108,5 @@ src/
 
 ## 后续工作
 
-- 做题工作台中的代码区目前是可编辑文本框，按 README 的技术栈应替换为 Monaco Editor。
 - 教师端侧边栏的题库管理、成绩分析、考生名单、镜像与资源、系统设置尚未实现，入口保留但不可跳转。
+- 工作台的运行测试 / 终端输出 / Agent 会话仍是演示数据，等待沙箱与 Agent 服务接入。

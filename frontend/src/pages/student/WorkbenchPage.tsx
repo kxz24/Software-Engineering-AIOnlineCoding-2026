@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useHistory, useParams } from "react-router-dom";
 import { Icon } from "../../components/Icon";
+import { CodeEditor, LanguageOptions, languageForPath } from "../../components/CodeEditor";
 import { Routes } from "../../api/urls";
 import { findExam, formatCountdown } from "../../mock/exams";
 import {
@@ -29,24 +30,33 @@ const ProblemTabs: { key: ProblemTabKey; label: string; count?: number }[] = [
     { key: "submissions", label: "提交记录", count: 1 },
 ];
 
-/** 代码编辑区：原型是静态高亮行，这里换成受控 textarea，保留等宽外观但不引入高亮库 */
-const CodeInputStyle: React.CSSProperties = {
-    display: "block",
-    width: "100%",
-    height: "100%",
-    margin: 0,
-    padding: "0 12px 8px 12px",
-    border: "none",
-    outline: "none",
-    resize: "none",
-    background: "transparent",
-    whiteSpace: "pre",
-    overflow: "auto",
-    color: "#334155",
-    fontFamily: "\"SFMono-Regular\", Consolas, \"Liberation Mono\", Menlo, monospace",
-    fontSize: 11.5,
-    lineHeight: "20px",
-};
+/** 本地草稿的结构：按考试维度存到 localStorage，刷新页面不丢代码 */
+interface DraftPayload {
+    version: 1;
+    contents: Record<string, string>;
+    openPaths: string[];
+    currentPath: string;
+    modified: Record<string, boolean>;
+    /** 各文件显式选择过的语言（'' / 缺省 = 按扩展名自动推断） */
+    languages: Record<string, string>;
+}
+
+/** 读取并校验本地草稿，损坏时当作没有 */
+function loadDraft(key: string): DraftPayload | null {
+    try {
+        const raw = localStorage.getItem(key);
+        if (!raw) {
+            return null;
+        }
+        const data = JSON.parse(raw);
+        if (data && data.version === 1 && typeof data.contents === "object") {
+            return data as DraftPayload;
+        }
+    } catch (e) {
+        // JSON 损坏等情况直接忽略
+    }
+    return null;
+}
 
 /** Agent 输入框：原型只是一行占位文案，这里换成可输入的 textarea */
 const AgentInputStyle: React.CSSProperties = {
@@ -104,12 +114,53 @@ export function WorkbenchPage() {
         return () => window.clearInterval(timer);
     }, []);
 
-    // 工作区：打开的文件标签、当前文件、各文件内容与「未保存」标记
-    const [openPaths, setOpenPaths] = useState<string[]>(() => DefaultOpenPaths.slice());
-    const [currentPath, setCurrentPath] = useState<string>(DefaultOpenPaths[0]);
-    const [contents, setContents] = useState<Record<string, string>>(() => ({ ...WorkspaceFiles }));
-    const [modified, setModified] = useState<Record<string, boolean>>(() => ({ ...DefaultModifiedPaths }));
+    // 工作区：打开的文件标签、当前文件、各文件内容与「未保存」标记。
+    // 代码是学生的实际作答内容，按考试存为本地草稿，刷新 / 断网不丢失
+    const draftKey = `workbench-draft-${examId}`;
+    const [savedDraft] = useState(() => loadDraft(draftKey));
+    const [openPaths, setOpenPaths] = useState<string[]>(() =>
+        savedDraft && savedDraft.openPaths.length ? savedDraft.openPaths : DefaultOpenPaths.slice());
+    const [currentPath, setCurrentPath] = useState<string>(() =>
+        savedDraft && savedDraft.currentPath ? savedDraft.currentPath : DefaultOpenPaths[0]);
+    const [contents, setContents] = useState<Record<string, string>>(() => ({
+        ...WorkspaceFiles,
+        ...(savedDraft ? savedDraft.contents : {}),
+    }));
+    const [modified, setModified] = useState<Record<string, boolean>>(() => ({
+        ...DefaultModifiedPaths,
+        ...(savedDraft ? savedDraft.modified : {}),
+    }));
+    /** 各文件显式选择过的语言；未选过的按扩展名推断 */
+    const [languages, setLanguages] = useState<Record<string, string>>(() => ({
+        ...(savedDraft ? savedDraft.languages : {}),
+    }));
     const [edited, setEdited] = useState(false);
+    /** 最近一次自动保存的时刻，展示在顶栏 */
+    const [savedClock, setSavedClock] = useState(savedDraft ? formatClock(new Date()) : "14:32:05");
+
+    const currentLanguage = languages[currentPath] || languageForPath(currentPath);
+
+    // 自动保存：工作区状态变化后延迟 800ms 写入本地草稿（debounce 掉连续击键）
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
+            try {
+                const payload: DraftPayload = {
+                    version: 1,
+                    contents,
+                    openPaths,
+                    currentPath,
+                    modified,
+                    languages,
+                };
+                localStorage.setItem(draftKey, JSON.stringify(payload));
+            } catch (e) {
+                // 存储失败（隐私模式 / 空间不足）不影响继续作答
+            }
+            setEdited(false);
+            setSavedClock(formatClock(new Date()));
+        }, 800);
+        return () => window.clearTimeout(timer);
+    }, [draftKey, contents, openPaths, currentPath, modified, languages]);
 
     const [problemTab, setProblemTab] = useState<ProblemTabKey>("statement");
     const [messages, setMessages] = useState(AgentMessages);
@@ -127,7 +178,6 @@ export function WorkbenchPage() {
     }, [messages.length]);
 
     const currentCode = contents[currentPath] || "";
-    const lineCount = currentCode.split("\n").length;
 
     /** 点击文件树或编辑器标签切换当前文件 */
     const openFile = (path: string) => {
@@ -148,9 +198,9 @@ export function WorkbenchPage() {
     };
 
     /** 编辑代码：写入内容、打上未保存标记 */
-    const handleCodeChange = (value: string) => {
-        setContents(current => ({ ...current, [currentPath]: value }));
-        setModified(current => ({ ...current, [currentPath]: true }));
+    const handleCodeChange = (path: string, value: string) => {
+        setContents(current => (current[path] === value ? current : { ...current, [path]: value }));
+        setModified(current => ({ ...current, [path]: true }));
         setEdited(true);
     };
 
@@ -210,7 +260,7 @@ export function WorkbenchPage() {
                         </div>
                         <div className="save-status">
                             <span className="dot" style={edited ? { background: "#f59e0b" } : undefined}/>
-                            {edited ? "有未保存修改" : "已自动保存 14:32:05"}
+                            {edited ? "有未保存修改" : `已自动保存 ${savedClock}`}
                         </div>
                         <button className="btn-submit" type="button" onClick={handleSubmit}>
                             <Icon name="arrow-up" size={14} strokeWidth={1.9}/>
@@ -371,23 +421,25 @@ export function WorkbenchPage() {
                                     );
                                 })}
                                 <div className="editor-actions">
-                                    <span>Python 3.11</span>
+                                    <select className="lang-select"
+                                            title="当前文件的语法高亮语言"
+                                            value={languages[currentPath] || ""}
+                                            onChange={event => setLanguages(current => ({
+                                                ...current,
+                                                [currentPath]: event.target.value,
+                                            }))}>
+                                        {LanguageOptions.map(option => (
+                                            <option key={option.id} value={option.id}>{option.label}</option>
+                                        ))}
+                                    </select>
                                     <span className="ok">● 自动保存已开启</span>
                                 </div>
                             </div>
                             <div className="editor-body">
-                                <div className="gutter">
-                                    {Array.from({ length: lineCount }, (_unused, index) => (
-                                        <div key={index}>{index + 1}</div>
-                                    ))}
-                                </div>
-                                <div className="code-area">
-                                    <textarea style={CodeInputStyle}
-                                              value={currentCode}
-                                              spellCheck={false}
-                                              wrap="off"
-                                              onChange={event => handleCodeChange(event.target.value)}/>
-                                </div>
+                                <CodeEditor path={currentPath}
+                                            initialValue={currentCode}
+                                            language={currentLanguage}
+                                            onChange={handleCodeChange}/>
                             </div>
                         </div>
 
