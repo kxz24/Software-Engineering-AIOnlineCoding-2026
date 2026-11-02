@@ -6,6 +6,7 @@ import { Provider } from "react-redux";
 import { MemoryRouter, Route } from "react-router-dom";
 import { store } from "./store";
 import { LoginPage } from "./pages/LoginPage";
+import { RegisterPage } from "./pages/RegisterPage";
 import { ExamListPage } from "./pages/student/ExamListPage";
 import { PrecheckPage } from "./pages/student/PrecheckPage";
 import { WorkbenchPage } from "./pages/student/WorkbenchPage";
@@ -19,6 +20,7 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 
 const Pages: { name: string; path: string; component: React.ComponentType<any> }[] = [
     { name: "login", path: "/login", component: LoginPage },
+    { name: "register", path: "/register", component: RegisterPage },
     { name: "exam-list", path: "/exams", component: ExamListPage },
     { name: "precheck", path: "/exams/:examId/precheck", component: PrecheckPage },
     { name: "workbench", path: "/exams/:examId/workbench", component: WorkbenchPage },
