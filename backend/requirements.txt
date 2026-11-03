@@ -1,3 +1,8 @@
+# -*- coding: utf-8 -*-
+# 首行编码声明是必要的：pip 只在文件带 BOM 或前两行有 coding 声明时才按 UTF-8
+# 解码，否则使用系统区域编码（中文 Windows 为 GBK），注释里的中文会让 pip 报
+# UnicodeDecodeError 而无法读取本文件。
+
 # Web 框架
 Django==4.2.5
 djangorestframework==3.15.2
@@ -12,4 +17,7 @@ drf-spectacular[sidecar]==0.27.2
 
 # 部署
 gunicorn==20.1.0
-mysqlclient==2.0.3
+# 2.0.3 的安装脚本依赖已被移除的 distutils.msvccompiler，在 Python 3.12+ /
+# 新版 setuptools 下必然构建失败；2.3.0 起提供 Windows 预编译 wheel，
+# 容器内仍从源码构建（Dockerfile 已装 gcc 与 default-libmysqlclient-dev）
+mysqlclient==2.3.0
