@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "app",
     "corsheaders",
     "user",
+    "problem",
     "rest_framework",
     "drf_spectacular",
     'drf_spectacular_sidecar',

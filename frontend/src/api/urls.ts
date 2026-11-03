@@ -8,6 +8,14 @@ export const Urls = {
     login: "/api/v1/login", // PATCH
     logout: "/api/v1/logout", // PATCH
     user: "/api/v1/user", // GET
+
+    users: "/api/v1/users", // GET 管理员列表 / POST 创建
+    usersImport: "/api/v1/users/import", // POST 批量导入
+    userDetail: (userId: number) => `/api/v1/users/${userId}`, // GET / PATCH
+    audit: "/api/v1/audit", // GET 管理员
+
+    problems: "/api/v1/problems", // GET 教师列表 / POST 创建
+    problemDetail: (problemId: number) => `/api/v1/problems/${problemId}`, // GET / PATCH / DELETE
 };
 
 /**
@@ -31,4 +39,9 @@ export const Routes = {
     examCreate: "/manage/new",
     problemConfig: (examId: string | number) => `/manage/${examId}/problems`,
     proctor: (examId: string | number) => `/manage/${examId}/proctor`,
+
+    /** 题库管理（教师 / 管理员） */
+    problemBank: "/manage/problems",
+    /** 账号管理（管理员） */
+    accounts: "/manage/accounts",
 };

@@ -16,6 +16,8 @@ import { ExamManagePage } from "./pages/teacher/ExamManagePage";
 import { ExamCreatePage } from "./pages/teacher/ExamCreatePage";
 import { ProblemConfigPage } from "./pages/teacher/ProblemConfigPage";
 import { ProctorPage } from "./pages/teacher/ProctorPage";
+import { ProblemBankPage } from "./pages/teacher/ProblemBankPage";
+import { AccountsPage } from "./pages/teacher/AccountsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
 const Pages: { name: string; path: string; component: React.ComponentType<any> }[] = [
@@ -30,6 +32,8 @@ const Pages: { name: string; path: string; component: React.ComponentType<any> }
     { name: "create", path: "/manage/new", component: ExamCreatePage },
     { name: "problems", path: "/manage/:examId/problems", component: ProblemConfigPage },
     { name: "proctor", path: "/manage/:examId/proctor", component: ProctorPage },
+    { name: "problem-bank", path: "/manage/problems", component: ProblemBankPage },
+    { name: "accounts", path: "/manage/accounts", component: AccountsPage },
     { name: "not-found", path: "/whatever", component: NotFoundPage },
 ];
 
