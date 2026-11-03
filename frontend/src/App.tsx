@@ -4,7 +4,7 @@ import { Redirect, Route, RouteProps, Switch, useLocation } from "react-router-d
 import { Store, userSlice } from "./store";
 import { fetchUser, isAuthenticated } from "./api/client";
 import { Routes } from "./api/urls";
-import { roleHome } from "./roles";
+import { Role, roleHome } from "./roles";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ExamListPage } from "./pages/student/ExamListPage";
@@ -16,18 +16,27 @@ import { ExamManagePage } from "./pages/teacher/ExamManagePage";
 import { ExamCreatePage } from "./pages/teacher/ExamCreatePage";
 import { ProblemConfigPage } from "./pages/teacher/ProblemConfigPage";
 import { ProctorPage } from "./pages/teacher/ProctorPage";
+import { ProblemBankPage } from "./pages/teacher/ProblemBankPage";
+import { AccountsPage } from "./pages/teacher/AccountsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { ToastHost } from "./components/Toast";
 import { isDemo, loadDemoUser } from "./demo";
 
 /**
- * 登录校验：没有令牌跳登录页；有令牌但用户信息还没拉到时先渲染一个空壳，
- * 由 App 统一在启动时请求 GET /api/v1/user 填充。
+ * 登录 + 角色校验：未登录跳登录页，角色不在允许列表内则回到该角色首页
+ * （如学生手输 /manage/accounts 会被送回 /exams）。
  */
-function RequireAuth({ children }: { children: React.ReactNode }) {
+function RequireRole({ roles, children }: { roles: Role[]; children: React.ReactNode }) {
     const location = useLocation();
+    const user = useSelector((s: Store) => s.user);
     if (!isAuthenticated()) {
         return <Redirect to={{ pathname: Routes.login, state: { from: location.pathname } }}/>;
+    }
+    if (!user) {
+        return <div className="student-page"/>;
+    }
+    if (!roles.includes(user.role)) {
+        return <Redirect to={roleHome(user.role)}/>;
     }
     return <>{children}</>;
 }
@@ -99,24 +108,28 @@ export function App() {
             <Route exact path="/" component={HomeRedirect}/>
 
             <Route exact path={Routes.examList}
-                   render={() => <RequireAuth><ExamListPage/></RequireAuth>}/>
+                   render={() => <RequireRole roles={["student"]}><ExamListPage/></RequireRole>}/>
             <Route exact path="/exams/:examId/precheck"
-                   render={() => <RequireAuth><PrecheckPage/></RequireAuth>}/>
+                   render={() => <RequireRole roles={["student"]}><PrecheckPage/></RequireRole>}/>
             <Route exact path="/exams/:examId/workbench"
-                   render={() => <RequireAuth><WorkbenchPage/></RequireAuth>}/>
+                   render={() => <RequireRole roles={["student"]}><WorkbenchPage/></RequireRole>}/>
             <Route exact path="/exams/:examId/result"
-                   render={() => <RequireAuth><ResultPage/></RequireAuth>}/>
+                   render={() => <RequireRole roles={["student"]}><ResultPage/></RequireRole>}/>
             <Route exact path="/exams/:examId/report"
-                   render={() => <RequireAuth><ReportPage/></RequireAuth>}/>
+                   render={() => <RequireRole roles={["student"]}><ReportPage/></RequireRole>}/>
 
             <Route exact path={Routes.examManage}
-                   render={() => <RequireAuth><ExamManagePage/></RequireAuth>}/>
+                   render={() => <RequireRole roles={["teacher", "admin"]}><ExamManagePage/></RequireRole>}/>
             <Route exact path={Routes.examCreate}
-                   render={() => <RequireAuth><ExamCreatePage/></RequireAuth>}/>
+                   render={() => <RequireRole roles={["teacher", "admin"]}><ExamCreatePage/></RequireRole>}/>
             <Route exact path="/manage/:examId/problems"
-                   render={() => <RequireAuth><ProblemConfigPage/></RequireAuth>}/>
+                   render={() => <RequireRole roles={["teacher", "admin"]}><ProblemConfigPage/></RequireRole>}/>
             <Route exact path="/manage/:examId/proctor"
-                   render={() => <RequireAuth><ProctorPage/></RequireAuth>}/>
+                   render={() => <RequireRole roles={["teacher", "admin"]}><ProctorPage/></RequireRole>}/>
+            <Route exact path={Routes.problemBank}
+                   render={() => <RequireRole roles={["teacher", "admin"]}><ProblemBankPage/></RequireRole>}/>
+            <Route exact path={Routes.accounts}
+                   render={() => <RequireRole roles={["admin"]}><AccountsPage/></RequireRole>}/>
 
             <Route component={NotFoundPage as React.ComponentType<RouteProps>}/>
         </Switch>

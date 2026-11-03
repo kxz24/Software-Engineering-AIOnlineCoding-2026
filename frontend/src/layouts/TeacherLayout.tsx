@@ -10,7 +10,6 @@ import { logout, removeToken } from "../api/client";
 
 /** 教师端侧边栏中尚未实现的模块，保留入口但不跳转 */
 const PendingLinks: { label: string; icon: IconName }[] = [
-    { label: "题库管理", icon: "book-open" },
     { label: "成绩分析", icon: "bar-chart" },
 ];
 
@@ -58,6 +57,9 @@ export function TeacherLayout({ breadcrumb, searchPlaceholder = "搜索考试、
                     <NavLink to={Routes.examManage} className="side-link" activeClassName="active">
                         <Icon name="file-text" size={16}/>考试管理
                     </NavLink>
+                    <NavLink to={Routes.problemBank} className="side-link" activeClassName="active">
+                        <Icon name="book-open" size={16}/>题库管理
+                    </NavLink>
                     {PendingLinks.map(link => (
                         <span key={link.label} className="side-link" title="该模块尚未接入">
                             <Icon name={link.icon} size={16}/>{link.label}
@@ -67,6 +69,11 @@ export function TeacherLayout({ breadcrumb, searchPlaceholder = "搜索考试、
                         <Icon name="monitor" size={16}/>监考中心
                     </NavLink>
                     <div className="side-label">配置</div>
+                    {user?.role === "admin" && (
+                        <NavLink to={Routes.accounts} className="side-link" activeClassName="active">
+                            <Icon name="shield" size={16}/>账号管理
+                        </NavLink>
+                    )}
                     {PendingConfigLinks.map(link => (
                         <span key={link.label} className="side-link" title="该模块尚未接入">
                             <Icon name={link.icon} size={16}/>{link.label}

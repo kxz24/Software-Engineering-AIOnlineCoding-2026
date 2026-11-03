@@ -26,7 +26,7 @@ npm test -- --watchAll=false  # 页面冒烟测试（src/pages.smoke.test.tsx）
 
 ```bash
 cd backend
-python manage.py makemigrations user   # 迁移文件被 backend/.gitignore 忽略，需各自本地生成
+python manage.py makemigrations user problem   # 迁移文件被 backend/.gitignore 忽略，需各自本地生成
 python manage.py migrate
 python manage.py runserver 127.0.0.1:8000
 ```
@@ -41,7 +41,7 @@ Monaco Editor 的运行时资源不进仓库：`npm install` 时 `postinstall` �
 
 ```text
 src/
-├── api/           后端接口（client.ts：注册 / 登录 / 登出 / 当前用户；urls.ts：接口与路由常量）
+├── api/           后端接口（client.ts：认证 / 账号管理 / 题库；urls.ts：接口与路由常量）
 ├── components/    公共组件（Brand、Icon、Toast、CodeEditor=Monaco 封装）
 ├── layouts/       两端外壳：StudentLayout（顶部导航）、TeacherLayout（侧边栏 + 顶栏）
 ├── mock/          演示数据（接口未就绪时页面从这里取数）
@@ -49,7 +49,7 @@ src/
 │   ├── LoginPage.tsx
 │   ├── RegisterPage.tsx
 │   ├── student/   02 我的考试、03 考试须知、04 做题工作台、05 提交结果、06 成绩报告
-│   └── teacher/   07 考试管理、08 创建考试、09 题目配置、10 监考中心
+│   └── teacher/   07 考试管理、08 创建考试、09 题目配置、10 监考中心、题库管理、账号管理
 ├── styles/        prototype.css（设计系统）、workbench.css（工作台，作用域 .wb-root）、app.css（布局自适应）
 ├── roles.ts       角色定义与角色首页
 └── store.ts       Redux store（token + user）
@@ -70,9 +70,13 @@ src/
 | 08 创建考试 | `/manage/new` | 教师 / 管理员 |
 | 09 题目配置 | `/manage/:examId/problems` | 教师 / 管理员 |
 | 10 监考中心 | `/manage/:examId/proctor` | 教师 / 管理员 |
+| 题库管理 | `/manage/problems` | 教师 / 管理员 |
+| 账号管理 | `/manage/accounts` | 管理员 |
 
 登录成功后按账号在后台记录的角色跳转：学生进 `/exams`，教师与管理员进 `/manage`。
 注册成功即视为登录，同样按角色跳转；注册页开放「学生 / 教师」两种角色，管理员由后台分配。
+受保护路由按角色校验（`App.tsx` 的 `RequireRole`）：学生访问 `/manage/*` 会被送回
+`/exams`，教师访问 `/manage/accounts` 会被送回 `/manage`。
 
 ## 做题工作台（04）
 
@@ -93,7 +97,7 @@ src/
 
 ## 与后端的关系
 
-目前后端提供四个接口：
+目前后端提供的接口：
 
 | 接口 | 方法 | 说明 |
 | --- | --- | --- |
@@ -101,12 +105,21 @@ src/
 | `/api/v1/login` | PATCH | 登录，返回 JWT 与角色 |
 | `/api/v1/logout` | PATCH | 登出（无状态，仅清本地令牌） |
 | `/api/v1/user` | GET | 当前登录用户信息 |
+| `/api/v1/users` | GET / POST | 账号列表（角色 / 关键字筛选）、创建账号，仅管理员 |
+| `/api/v1/users/import` | POST | CSV 批量导入（每行「账号,姓名[,角色][,邮箱]」，初始密码为账号），仅管理员 |
+| `/api/v1/users/:id` | GET / PATCH | 编辑账号（姓名 / 角色 / 邮箱 / 重置密码），仅管理员 |
+| `/api/v1/audit` | GET | 审计日志（登录与账号 / 题库操作），仅管理员 |
+| `/api/v1/problems` | GET / POST | 题库列表（关键字 / 题型 / 语言筛选）、创建题目，教师 / 管理员 |
+| `/api/v1/problems/:id` | GET / PATCH / DELETE | 题目详情、编辑（含测试样例整体替换）、删除，教师 / 管理员 |
 
 令牌保存在 `localStorage`，请求时原样放在 `Authorization` 头里（不带 `Bearer` 前缀）。
-其余页面（考试、题目、成绩、监考）的数据来自 `src/mock/`，接口就绪后把对应的
+除认证外的四个入口（账号、导入、审计、题库）统一走 `client.ts` 的 `request()`，
+非 2xx 抛 `ApiError`，页面 catch 后展示错误与重试。
+其余页面（考试、成绩、监考）的数据来自 `src/mock/`，接口就绪后把对应的
 `mock` 引用替换成 `fetch` 调用即可，页面组件不需要改结构。
 
 ## 后续工作
 
-- 教师端侧边栏的题库管理、成绩分析、考生名单、镜像与资源、系统设置尚未实现，入口保留但不可跳转。
+- 教师端侧边栏的成绩分析、考生名单、镜像与资源、系统设置尚未实现，入口保留但不可跳转。
+- 找回密码、教师子角色（命题人 / 监考 / 面试官）权限细分尚未实现。
 - 工作台的运行测试 / 终端输出 / Agent 会话仍是演示数据，等待沙箱与 Agent 服务接入。
