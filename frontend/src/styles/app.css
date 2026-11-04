@@ -152,19 +152,6 @@ input::placeholder {
   user-select: none;
 }
 
-/* 演示模式入口（仅开发环境显示，接入真实接口后可删除） */
-.demo-entry {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed #e2e8f0;
-  font-size: 10px;
-  color: #94a3b8;
-}
-
 /* ---------- 通用动画 ---------- */
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(4px); }

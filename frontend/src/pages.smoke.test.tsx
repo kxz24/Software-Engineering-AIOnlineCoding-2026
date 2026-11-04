@@ -12,6 +12,7 @@ import { PrecheckPage } from "./pages/student/PrecheckPage";
 import { WorkbenchPage } from "./pages/student/WorkbenchPage";
 import { ResultPage } from "./pages/student/ResultPage";
 import { ReportPage } from "./pages/student/ReportPage";
+import { ReportsPage } from "./pages/student/ReportsPage";
 import { ExamManagePage } from "./pages/teacher/ExamManagePage";
 import { ExamCreatePage } from "./pages/teacher/ExamCreatePage";
 import { ProblemConfigPage } from "./pages/teacher/ProblemConfigPage";
@@ -28,10 +29,12 @@ const Pages: { name: string; path: string; component: React.ComponentType<any> }
     { name: "workbench", path: "/exams/:examId/workbench", component: WorkbenchPage },
     { name: "result", path: "/exams/:examId/result", component: ResultPage },
     { name: "report", path: "/exams/:examId/report", component: ReportPage },
+    { name: "reports", path: "/reports", component: ReportsPage },
     { name: "manage", path: "/manage", component: ExamManagePage },
     { name: "create", path: "/manage/new", component: ExamCreatePage },
     { name: "problems", path: "/manage/:examId/problems", component: ProblemConfigPage },
     { name: "proctor", path: "/manage/:examId/proctor", component: ProctorPage },
+    { name: "proctor-home", path: "/manage/proctor", component: ProctorPage },
     { name: "problem-bank", path: "/manage/problems", component: ProblemBankPage },
     { name: "accounts", path: "/manage/accounts", component: AccountsPage },
     { name: "not-found", path: "/whatever", component: NotFoundPage },

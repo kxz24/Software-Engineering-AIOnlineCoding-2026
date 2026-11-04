@@ -627,8 +627,7 @@ export function setToken(token: string) {
     localStorage.setItem("token", token);
 }
 
-/** 清除令牌（同时清掉演示模式写入的本地用户） */
+/** 清除令牌 */
 export function removeToken() {
     localStorage.removeItem("token");
-    localStorage.removeItem("demoUser");
 }

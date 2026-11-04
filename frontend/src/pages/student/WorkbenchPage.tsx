@@ -213,26 +213,40 @@ export function WorkbenchPage() {
     const currentLanguage = (currentPath && languages[currentPath]) ||
         (problem ? (LanguageExtensions[problem.language] ? problem.language : languageForPath(currentPath)) : "plaintext");
 
+    /** 把当前工作区写入本地草稿（自动保存与手动保存共用） */
+    const writeDraft = () => {
+        try {
+            const payload: DraftPayload = { version: 2, contents, languages };
+            localStorage.setItem(draftKey, JSON.stringify(payload));
+        } catch (e) {
+            // 存储失败（隐私模式 / 空间不足）不影响继续作答
+        }
+        setEdited(false);
+        setSavedClock(formatClock(new Date()));
+    };
+
     // 自动保存：工作区状态变化后延迟 800ms 写入本地草稿（debounce 掉连续击键）
     useEffect(() => {
         if (!detail) {
             return;
         }
-        const timer = window.setTimeout(() => {
-            try {
-                const payload: DraftPayload = { version: 2, contents, languages };
-                localStorage.setItem(draftKey, JSON.stringify(payload));
-            } catch (e) {
-                // 存储失败（隐私模式 / 空间不足）不影响继续作答
-            }
-            setEdited(false);
-            setSavedClock(formatClock(new Date()));
-        }, 800);
+        const timer = window.setTimeout(writeDraft, 800);
         return () => window.clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [draftKey, detail, contents, languages]);
+
+    /** 手动保存草稿 */
+    const handleSaveDraft = () => {
+        writeDraft();
+        toast("草稿已保存", "success");
+    };
 
     const [problemTab, setProblemTab] = useState<ProblemTabKey>("statement");
     const [submitting, setSubmitting] = useState(false);
+
+    // 终端演示：页签切换与清屏
+    const [termTab, setTermTab] = useState<"test" | "output" | "problem">("test");
+    const [termCleared, setTermCleared] = useState(false);
 
     // Agent 对话：本地演示（服务随后续迭代接入）
     const [messages, setMessages] = useState<AgentMessage[]>([
@@ -332,6 +346,8 @@ export function WorkbenchPage() {
                 ]);
                 setProblemTab("submissions");
                 toast(`已提交（待判定），本题剩余 ${result.remaining} 次`, "success");
+                // 提交成功后进入 05 提交结果页查看收卷状态
+                history.push(Routes.examResult(detail.id));
             })
             .catch((e: ApiError) => {
                 setSubmitting(false);
@@ -470,9 +486,13 @@ export function WorkbenchPage() {
                     <aside className="sidebar-left">
                         <div className="panel-head">
                             <div className="panel-title">工作区</div>
-                            <div className="icon-btn" title="运行环境随判题容器接入（演示）">
-                                <Icon name="refresh" size={14}/>
-                            </div>
+                            <button type="button"
+                                    className="link"
+                                    style={{ fontSize: 11 }}
+                                    title="立即把当前代码写入本地草稿"
+                                    onClick={handleSaveDraft}>
+                                保存草稿
+                            </button>
                         </div>
                         <div className="section-label">{detail.course || "EXAM"}</div>
                         <div className="tree">
@@ -657,13 +677,21 @@ export function WorkbenchPage() {
                                     <Icon name="terminal" size={13} stroke="#475569"/>
                                     终端
                                 </div>
-                                <div className="terminal-tab active" title="演示数据，运行环境随判题容器接入">测试</div>
-                                <div className="terminal-tab">输出</div>
-                                <div className="terminal-tab">问题</div>
-                                <div className="terminal-tab terminal-clear">清屏</div>
+                                <div className={"terminal-tab" + (termTab === "test" ? " active" : "")}
+                                     title="演示数据，运行环境随判题容器接入"
+                                     onClick={() => setTermTab("test")}>测试</div>
+                                <div className={"terminal-tab" + (termTab === "output" ? " active" : "")}
+                                     title="运行输出随判题容器接入"
+                                     onClick={() => setTermTab("output")}>输出</div>
+                                <div className={"terminal-tab" + (termTab === "problem" ? " active" : "")}
+                                     title="运行问题随判题容器接入"
+                                     onClick={() => setTermTab("problem")}>问题</div>
+                                <div className="terminal-tab terminal-clear"
+                                     title="清空当前页签内容"
+                                     onClick={() => setTermCleared(true)}>清屏</div>
                             </div>
                             <div className="terminal-body">
-                                {TerminalLines.map((line, lineIndex) => (
+                                {termTab === "test" && !termCleared && TerminalLines.map((line, lineIndex) => (
                                     <div className="term-line" key={lineIndex}>
                                         {line.map((segment, index) => (
                                             <span key={index}
@@ -673,6 +701,15 @@ export function WorkbenchPage() {
                                         ))}
                                     </div>
                                 ))}
+                                {termTab !== "test" && !termCleared && (
+                                    <div className="term-line muted">
+                                        {termTab === "output" ? "尚无运行输出。" : "没有运行问题。"}
+                                        运行环境随判题容器接入（下一迭代）。
+                                    </div>
+                                )}
+                                {termCleared && (
+                                    <div className="term-line muted">已清屏；切回「测试」页签可重新载入演示数据。</div>
+                                )}
                             </div>
                         </div>
                     </section>
@@ -694,12 +731,6 @@ export function WorkbenchPage() {
                                     <Icon name="lock" size={10} strokeWidth={2}/>
                                     {AiModeLabels[detail.aiMode] || detail.aiMode}
                                 </span>
-                                <div className="icon-btn">
-                                    <Icon name="history" size={14}/>
-                                </div>
-                                <div className="icon-btn">
-                                    <Icon name="more-horizontal" size={14} strokeWidth={2}/>
-                                </div>
                             </div>
                         </div>
 
@@ -709,7 +740,6 @@ export function WorkbenchPage() {
                                 <Icon name="file" size={10}/>
                                 {currentPath || "—"}
                             </span>
-                            <span className="ctx-add">+ 添加</span>
                         </div>
 
                         <div className="chat" ref={chatRef}>
@@ -747,8 +777,6 @@ export function WorkbenchPage() {
                                           }}/>
                                 <div className="input-toolbar">
                                     <div className="input-tools">
-                                        <Icon name="at-sign" size={14}/>
-                                        <Icon name="paperclip" size={14}/>
                                         <span className="input-hint">Enter 发送 · Shift+Enter 换行</span>
                                     </div>
                                     <button className="send-btn" type="button" onClick={handleSend}>

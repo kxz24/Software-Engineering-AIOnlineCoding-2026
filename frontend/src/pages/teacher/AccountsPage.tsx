@@ -216,7 +216,7 @@ export function AccountsPage() {
     };
 
     return (
-        <TeacherLayout breadcrumb={["工作台", "账号管理"]} searchPlaceholder="搜索账号或姓名">
+        <TeacherLayout breadcrumb={["工作台", "账号管理"]}>
             <div className="page-head">
                 <div>
                     <div className="page-title">账号管理</div>

@@ -8,7 +8,7 @@ import { Routes } from "../api/urls";
 import { roleLabel } from "../roles";
 import { logout, removeToken } from "../api/client";
 
-/** 学生端的三个一级入口，对应原型的顶部导航 */
+/** 学生端的一级入口，对应原型的顶部导航（考试须知随「进入考试」流程进入） */
 export type StudentNav = "exams" | "reports" | "precheck";
 
 interface Props {
@@ -17,7 +17,7 @@ interface Props {
 }
 
 /**
- * 学生端外壳：顶部导航（我的考试 / 成绩报告 / 考试须知）+ 1180px 内容区。
+ * 学生端外壳：顶部导航（我的考试 / 成绩报告）+ 1180px 内容区。
  * 对应原型 02、03、05、06 页的 student-page 结构。
  */
 export function StudentLayout({ active, children }: Props) {
@@ -26,8 +26,7 @@ export function StudentLayout({ active, children }: Props) {
 
     const navItems: { key: StudentNav; label: string; to: string }[] = [
         { key: "exams", label: "我的考试", to: Routes.examList },
-        { key: "reports", label: "成绩报告", to: Routes.examReport("exam-mid-2026") },
-        { key: "precheck", label: "考试须知", to: Routes.examPrecheck("exam-mid-2026") },
+        { key: "reports", label: "成绩报告", to: Routes.reports },
     ];
 
     /** 退出登录：后端无状态，清掉本地令牌即可；后端未启动时也要能退出 */
@@ -57,12 +56,6 @@ export function StudentLayout({ active, children }: Props) {
                     </nav>
                 </div>
                 <div className="student-nav-right">
-                    <span className="icon-btn plain" title="搜索">
-                        <Icon name="search" size={16}/>
-                    </span>
-                    <span className="icon-btn plain" title="通知">
-                        <Icon name="bell" size={16}/>
-                    </span>
                     <div className="user-inline">
                         <div className="avatar sm">{(user?.nickname || "考").slice(0, 1)}</div>
                         <div>

@@ -3,35 +3,22 @@ import { useSelector } from "react-redux";
 import { NavLink, useHistory } from "react-router-dom";
 import { Store } from "../store";
 import { Brand } from "../components/Brand";
-import { Icon, IconName } from "../components/Icon";
+import { Icon } from "../components/Icon";
 import { Routes } from "../api/urls";
 import { roleLabel } from "../roles";
 import { logout, removeToken } from "../api/client";
 
-/** 教师端侧边栏中尚未实现的模块，保留入口但不跳转 */
-const PendingLinks: { label: string; icon: IconName }[] = [
-    { label: "成绩分析", icon: "bar-chart" },
-];
-
-const PendingConfigLinks: { label: string; icon: IconName }[] = [
-    { label: "考生名单", icon: "users" },
-    { label: "镜像与资源", icon: "database" },
-    { label: "系统设置", icon: "settings" },
-];
-
 interface Props {
     /** 面包屑，最后一项为当前页 */
     breadcrumb: string[];
-    /** 顶部搜索框占位文案 */
-    searchPlaceholder?: string;
     children: React.ReactNode;
 }
 
 /**
- * 教师端外壳：220px 侧边栏 + 60px 顶栏（面包屑 / 搜索 / 用户）。
+ * 教师端外壳：220px 侧边栏 + 60px 顶栏（面包屑 / 用户）。
  * 对应原型 07、08、09、10 页的 teacher-shell 结构。
  */
-export function TeacherLayout({ breadcrumb, searchPlaceholder = "搜索考试、题目或考生", children }: Props) {
+export function TeacherLayout({ breadcrumb, children }: Props) {
     const user = useSelector((s: Store) => s.user);
     const history = useHistory();
 
@@ -60,25 +47,17 @@ export function TeacherLayout({ breadcrumb, searchPlaceholder = "搜索考试、
                     <NavLink to={Routes.problemBank} className="side-link" activeClassName="active">
                         <Icon name="book-open" size={16}/>题库管理
                     </NavLink>
-                    {PendingLinks.map(link => (
-                        <span key={link.label} className="side-link" title="该模块尚未接入">
-                            <Icon name={link.icon} size={16}/>{link.label}
-                        </span>
-                    ))}
-                    <NavLink to={Routes.proctor("exam-mid-2026")} className="side-link" activeClassName="active">
+                    <NavLink to={Routes.proctorHome} className="side-link" activeClassName="active">
                         <Icon name="monitor" size={16}/>监考中心
                     </NavLink>
-                    <div className="side-label">配置</div>
                     {user?.role === "admin" && (
-                        <NavLink to={Routes.accounts} className="side-link" activeClassName="active">
-                            <Icon name="shield" size={16}/>账号管理
-                        </NavLink>
+                        <>
+                            <div className="side-label">配置</div>
+                            <NavLink to={Routes.accounts} className="side-link" activeClassName="active">
+                                <Icon name="shield" size={16}/>账号管理
+                            </NavLink>
+                        </>
                     )}
-                    {PendingConfigLinks.map(link => (
-                        <span key={link.label} className="side-link" title="该模块尚未接入">
-                            <Icon name={link.icon} size={16}/>{link.label}
-                        </span>
-                    ))}
                 </div>
                 <div className="side-bottom">
                     <div className="user-inline">
@@ -109,15 +88,6 @@ export function TeacherLayout({ breadcrumb, searchPlaceholder = "搜索考试、
                         })}
                     </div>
                     <div className="topbar-actions">
-                        <span className="search-box">
-                            <Icon name="search" size={14}/>{searchPlaceholder}
-                        </span>
-                        <span className="icon-btn plain" title="通知">
-                            <Icon name="bell" size={16}/>
-                        </span>
-                        <span className="icon-btn plain" title="设置">
-                            <Icon name="settings" size={16}/>
-                        </span>
                         <div className="avatar sm">{(user?.nickname || "师").slice(0, 1)}</div>
                     </div>
                 </header>

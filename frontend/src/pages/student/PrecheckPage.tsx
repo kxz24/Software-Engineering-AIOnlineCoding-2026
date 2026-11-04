@@ -14,12 +14,54 @@ const Steps = [
     { title: "进入考场", sub: "等待自检", state: "todo" as const },
 ];
 
-/** 环境自检项（检测服务后续迭代接入，当前为浏览器端静态检查） */
-const EnvChecks: { icon: IconName; tone?: "green" | "purple"; title: string; desc: string }[] = [
-    { icon: "monitor", title: "浏览器", desc: "Chrome / Edge 最新两个版本 · 分辨率 1280×800 以上" },
-    { icon: "wifi", title: "网络", desc: "能够访问本平台 API · 建议有线或稳定 Wi-Fi" },
-    { icon: "terminal", title: "编辑器与终端", desc: "在线编辑器与模拟终端加载正常" },
-    { icon: "sparkles", tone: "purple", title: "Coding Agent", desc: "按本场考试的 AI 策略提供 · 对话全程留痕" },
+/** 环境自检项：浏览器端的真实检测，desc 是未通过时的建议 */
+interface EnvCheckDef {
+    key: string;
+    icon: IconName;
+    tone?: "green" | "purple";
+    title: string;
+    desc: string;
+    run: () => boolean;
+}
+
+const EnvCheckDefs: EnvCheckDef[] = [
+    {
+        key: "browser",
+        icon: "monitor",
+        title: "浏览器",
+        desc: "建议使用 Chrome / Edge / Firefox 的较新版本",
+        run: () => /Chrome|Edg|Firefox|Safari/.test(navigator.userAgent),
+    },
+    {
+        key: "network",
+        icon: "wifi",
+        title: "网络连接",
+        desc: "本机网络已断开，请检查连接后重试",
+        run: () => navigator.onLine,
+    },
+    {
+        key: "storage",
+        icon: "terminal",
+        title: "本地存储（代码草稿）",
+        desc: "浏览器禁用了本地存储，代码草稿将无法自动保存",
+        run: () => {
+            try {
+                localStorage.setItem("__precheck__", "1");
+                localStorage.removeItem("__precheck__");
+                return true;
+            } catch (e) {
+                return false;
+            }
+        },
+    },
+    {
+        key: "viewport",
+        icon: "sparkles",
+        tone: "purple",
+        title: "窗口尺寸",
+        desc: "窗口过窄可能影响作答界面，建议全屏或使用大屏幕",
+        run: () => window.innerWidth >= 1100,
+    },
 ];
 
 const AiModeLabels: Record<string, string> = { limited: "受限", open: "开放", closed: "关闭" };
@@ -34,6 +76,26 @@ export function PrecheckPage() {
     const [error, setError] = useState<string | null>(null);
     const [agreed, setAgreed] = useState(true);
     const [, setTick] = useState(0);
+
+    // 环境自检：真实的浏览器端检测，可重复执行
+    const [checkResults, setCheckResults] = useState<Record<string, boolean>>({});
+    const [checking, setChecking] = useState(true);
+    const [lastCheck, setLastCheck] = useState<string>("");
+
+    const runChecks = () => {
+        setChecking(true);
+        window.setTimeout(() => {
+            const results: Record<string, boolean> = {};
+            EnvCheckDefs.forEach(item => {
+                results[item.key] = item.run();
+            });
+            setCheckResults(results);
+            setChecking(false);
+            setLastCheck(new Date().toTimeString().slice(0, 8));
+        }, 500);
+    };
+
+    useEffect(runChecks, []);
 
     const load = () => {
         setLoading(true);
@@ -138,24 +200,40 @@ export function PrecheckPage() {
                         <div className="card-head">
                             <div>
                                 <div className="card-title">环境自检</div>
-                                <div className="card-sub">浏览器端静态检查 · 运行环境检测随判题容器接入</div>
+                                <div className="card-sub">
+                                    浏览器端真实检测{lastCheck ? ` · 最近检测 ${lastCheck}` : ""}
+                                    {" · 判题容器与 Agent 运行环境随评测服务接入"}
+                                </div>
                             </div>
-                            <span className="badge green">{EnvChecks.length} / {EnvChecks.length} 通过</span>
+                            {checking
+                                ? <span className="badge blue">检测中…</span>
+                                : <span className={"badge " + (Object.values(checkResults).every(Boolean) ? "green" : "amber")}>
+                                    {Object.values(checkResults).filter(Boolean).length} / {EnvCheckDefs.length} 通过
+                                </span>}
                         </div>
                         <div className="card-body">
-                            {EnvChecks.map((item, index) => (
-                                <div className={"check-item" + (index === EnvChecks.length - 1 ? " last" : "")}
-                                     key={item.title}>
-                                    <div className={"ci-icon" + (item.tone ? " " + item.tone : "")}>
-                                        <Icon name={item.icon} size={17}/>
+                            {EnvCheckDefs.map((item, index) => {
+                                const passed = checkResults[item.key];
+                                return (
+                                    <div className={"check-item" + (index === EnvCheckDefs.length - 1 ? " last" : "")}
+                                         key={item.key}>
+                                        <div className={"ci-icon" + (item.tone ? " " + item.tone : "")}>
+                                            <Icon name={item.icon} size={17}/>
+                                        </div>
+                                        <div className="ci-main">
+                                            <div className="ci-title">{item.title}</div>
+                                            <div className="ci-desc">
+                                                {passed === false ? item.desc : "检测通过"}
+                                            </div>
+                                        </div>
+                                        {checking
+                                            ? <span className="badge gray">…</span>
+                                            : <span className={"badge " + (passed ? "green" : "amber")}>
+                                                {passed ? "通过" : "注意"}
+                                            </span>}
                                     </div>
-                                    <div className="ci-main">
-                                        <div className="ci-title">{item.title}</div>
-                                        <div className="ci-desc">{item.desc}</div>
-                                    </div>
-                                    <span className="badge green">通过</span>
-                                </div>
-                            ))}
+                                );
+                            })}
 
                             {/* 考试须知（来自考试配置） */}
                             {exam.notice && (
@@ -171,10 +249,11 @@ export function PrecheckPage() {
                             <div className="precheck-actions">
                                 <button type="button"
                                         className="btn btn-secondary"
-                                        onClick={() => toast("正在重新检测环境，请稍候", "info")}>
+                                        disabled={checking}
+                                        onClick={runChecks}>
                                     <Icon name="refresh" size={14}/>重新检测
                                 </button>
-                                <span className="hint">如检测失败，请重试或联系监考老师。</span>
+                                <span className="hint">自检不阻断进入考场；如有问题请重试或联系监考老师。</span>
                             </div>
                         </div>
                     </div>
