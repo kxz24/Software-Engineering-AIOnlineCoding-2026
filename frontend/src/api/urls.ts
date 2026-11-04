@@ -48,11 +48,15 @@ export const Routes = {
     examWorkbench: (examId: string | number) => `/exams/${examId}/workbench`,
     examResult: (examId: string | number) => `/exams/${examId}/result`,
     examReport: (examId: string | number) => `/exams/${examId}/report`,
+    /** 成绩报告首页：列出可查看报告的考试 */
+    reports: "/reports",
 
     examManage: "/manage",
     examCreate: "/manage/new",
     examEdit: (examId: string | number) => `/manage/${examId}/edit`,
     problemConfig: (examId: string | number) => `/manage/${examId}/problems`,
+    /** 监考中心首页：选择要监考的考试 */
+    proctorHome: "/manage/proctor",
     proctor: (examId: string | number) => `/manage/${examId}/proctor`,
 
     /** 题库管理（教师 / 管理员） */

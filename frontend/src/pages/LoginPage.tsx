@@ -7,7 +7,6 @@ import { login } from "../api/client";
 import { Routes } from "../api/urls";
 import { tokenSlice, userSlice } from "../store";
 import { Role, roleHome, Roles } from "../roles";
-import { demoHome, DemoEnabled, enterDemo } from "../demo";
 
 /** 原型里的三个身份标签；真实角色仍以账号在后端记录的角色为准 */
 const IdentityTabs: Role[] = ["student", "teacher", "admin"];
@@ -78,21 +77,10 @@ export function LoginPage() {
         history.push(location.state?.from || roleHome(result.role));
     };
 
-    /** 演示模式：不经过后端，直接用内置账号进入对应工作台 */
-    const enterAs = (identity: "student" | "teacher") => {
-        const demoUser = enterDemo(identity);
-        dispatch(tokenSlice.actions.setToken("demo-token"));
-        dispatch(userSlice.actions.updateUserStatus(demoUser));
-        history.push(demoHome(demoUser.role));
-    };
-
     return (
         <div className="login-page">
             <div className="login-top">
                 <Brand/>
-                <div className="login-top-right">
-                    <span>帮助中心</span><span>·</span><span>隐私说明</span>
-                </div>
             </div>
 
             <div className="login-wrap">
@@ -138,7 +126,6 @@ export function LoginPage() {
                                 </svg>}
                             </span>记住我
                         </span>
-                        <span className="link">忘记密码？</span>
                     </div>
 
                     {error && (
@@ -158,15 +145,6 @@ export function LoginPage() {
                         当前身份：{Roles[identity].label} · {IdentityHints[identity]}
                     </div>
                     <div className="login-foot">登录即表示同意《考试诚信与数据使用说明》</div>
-
-                    {DemoEnabled && (
-                        <div className="demo-entry">
-                            后端未就绪？
-                            <span className="link" onClick={() => enterAs("student")}>以学生身份预览</span>
-                            <span className="muted">·</span>
-                            <span className="link" onClick={() => enterAs("teacher")}>以教师身份预览</span>
-                        </div>
-                    )}
                 </form>
             </div>
 

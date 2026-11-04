@@ -1,305 +1,475 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { TeacherLayout } from "../../layouts/TeacherLayout";
-import { Icon, IconName } from "../../components/Icon";
+import { Icon } from "../../components/Icon";
 import { toast } from "../../components/Toast";
 import { Routes } from "../../api/urls";
-import { findExam } from "../../mock/exams";
+import { formatCountdown, formatDateTime, formatShort, secondsUntil } from "../../api/format";
+import {
+    ApiError,
+    ExamDetail,
+    ExamSubmissionEntry,
+    ExamSummary,
+    fetchExam,
+    fetchExamSubmissions,
+    fetchExams,
+} from "../../api/client";
 
-interface ProctorStat {
-    icon: IconName;
-    /** 图标底色修饰类，空字符串为默认蓝色 */
-    tone: "" | "green" | "amber" | "red";
-    value: string;
-    label: string;
-    /** 右侧补充说明，仅告警卡片有 */
-    trend?: string;
-    trendTone?: "green" | "red";
-}
+/** 每 15 秒自动拉取一次提交动态 */
+const RefreshIntervalMs = 15000;
 
-const ProctorStats: ProctorStat[] = [
-    { icon: "users", tone: "green", value: "42 / 45", label: "在线考生" },
-    { icon: "check-circle", tone: "", value: "38", label: "已提交" },
-    { icon: "alert-triangle", tone: "red", value: "3", label: "异常告警", trend: "1 高 · 1 中 · 1 低", trendTone: "red" },
-    { icon: "clock", tone: "amber", value: "01:27:34", label: "剩余时间" },
-];
+const StatusLabels: Record<string, { label: string; badge: string }> = {
+    upcoming: { label: "待开始", badge: "blue" },
+    ongoing: { label: "进行中", badge: "green" },
+    finished: { label: "已结束", badge: "gray" },
+};
 
-interface CandidateRow {
-    name: string;
-    studentNo: string;
-    /** 状态文案与配色，沿用原型的 badge 修饰类 */
-    status: string;
-    statusTone: "blue" | "green" | "amber";
-    progress: string;
+/** 把提交记录整理成「每个考生一行」的统计 */
+interface CandidateStat {
+    username: string;
+    nickname: string;
     submitCount: number;
-    aiRounds: string;
-    /** 有告警的考生才显示「处置」入口，无告警显示「查看」 */
-    alert?: { text: string; tone: "red" | "amber" };
+    problemCount: number;
+    lastCreated: string;
 }
 
-const Candidates: CandidateRow[] = [
-    { name: "李同学", studentNo: "2023012345", status: "作答中", statusTone: "blue", progress: "任务 1 / 3", submitCount: 1, aiRounds: "6 轮" },
-    {
-        name: "王同学", studentNo: "2023012388", status: "作答中", statusTone: "blue", progress: "任务 1 / 3",
-        submitCount: 0, aiRounds: "2 轮", alert: { text: "高 1", tone: "red" },
-    },
-    { name: "陈同学", studentNo: "2023012301", status: "已提交", statusTone: "green", progress: "3 / 3", submitCount: 2, aiRounds: "12 轮" },
-    {
-        name: "赵同学", studentNo: "2023012322", status: "断线重连", statusTone: "amber", progress: "任务 2 / 3",
-        submitCount: 1, aiRounds: "4 轮", alert: { text: "低 1", tone: "amber" },
-    },
-    {
-        name: "孙同学", studentNo: "2023012340", status: "作答中", statusTone: "blue", progress: "任务 1 / 3",
-        submitCount: 0, aiRounds: "0 轮", alert: { text: "中 1", tone: "amber" },
-    },
-    { name: "周同学", studentNo: "2023012356", status: "作答中", statusTone: "blue", progress: "任务 2 / 3", submitCount: 1, aiRounds: "8 轮" },
-    { name: "吴同学", studentNo: "2023012367", status: "作答中", statusTone: "blue", progress: "任务 1 / 3", submitCount: 0, aiRounds: "3 轮" },
-    { name: "郑同学", studentNo: "2023012379", status: "已提交", statusTone: "green", progress: "3 / 3", submitCount: 2, aiRounds: "10 轮" },
-    { name: "冯同学", studentNo: "2023012384", status: "作答中", statusTone: "blue", progress: "任务 2 / 3", submitCount: 1, aiRounds: "5 轮" },
-    { name: "褚同学", studentNo: "2023012391", status: "作答中", statusTone: "blue", progress: "任务 1 / 3", submitCount: 0, aiRounds: "1 轮" },
-];
-
-interface AlertButton {
-    label: string;
-    /** 红色按钮用于不可逆操作 */
-    danger?: boolean;
-    /** 点击前的二次确认文案，为空则直接执行 */
-    confirm?: string;
-    /** 执行后的轻提示 */
-    message: string;
+function groupByStudent(submissions: ExamSubmissionEntry[]): CandidateStat[] {
+    const map = new Map<string, CandidateStat>();
+    const problemsByStudent = new Map<string, Set<number>>();
+    submissions.forEach(item => {
+        const row = map.get(item.username) || {
+            username: item.username,
+            nickname: item.nickname || item.username,
+            submitCount: 0,
+            problemCount: 0,
+            lastCreated: item.created,
+        };
+        row.submitCount += 1;
+        if (item.created > row.lastCreated) {
+            row.lastCreated = item.created;
+        }
+        map.set(item.username, row);
+        const set = problemsByStudent.get(item.username) || new Set<number>();
+        set.add(item.problemId);
+        problemsByStudent.set(item.username, set);
+    });
+    return Array.from(map.values()).map(row => ({
+        ...row,
+        problemCount: (problemsByStudent.get(row.username) || new Set()).size,
+    }));
 }
 
-interface AlertItem {
-    level: "high" | "medium" | "low";
-    badge: string;
-    badgeTone: "red" | "amber" | "gray";
-    time: string;
-    title: string;
-    desc: string;
-    buttons: AlertButton[];
+/** 导出提交记录 CSV（带 BOM，Excel 打开中文不乱码） */
+function exportCsv(exam: ExamDetail, submissions: ExamSubmissionEntry[]) {
+    const header = ["提交ID", "时间", "考生", "学号/工号", "题目", "语言", "状态"];
+    const lines = submissions.map(item => [
+        String(item.id),
+        formatDateTime(item.created),
+        item.nickname,
+        item.username,
+        item.problemTitle,
+        item.language,
+        "待判定",
+    ]);
+    const csv = [header, ...lines]
+        .map(row => row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(","))
+        .join("\r\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${exam.title}-提交记录.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
 }
 
-const AlertItems: AlertItem[] = [
-    {
-        level: "high",
-        badge: "高",
-        badgeTone: "red",
-        time: "14:41:08",
-        title: "王同学 · 粘贴大段代码",
-        desc: "检测到 120 行剪贴板内容，已生成代码快照 #17。",
-        buttons: [
-            { label: "查看证据", message: "已打开代码快照 #17 的剪贴板证据" },
-            {
-                label: "终止考试",
-                danger: true,
-                confirm: "终止后王同学将无法继续作答，确定终止其考试吗？",
-                message: "已终止王同学的考试",
-            },
-        ],
-    },
-    {
-        level: "medium",
-        badge: "中",
-        badgeTone: "amber",
-        time: "14:36:20",
-        title: "赵同学 · 网络中断 42s",
-        desc: "已自动重连并恢复到快照 #14；可考虑补时。",
-        buttons: [
-            { label: "补时 2 分钟", message: "已为赵同学补时 2 分钟" },
-            { label: "查看", message: "已打开赵同学的告警详情" },
-        ],
-    },
-    {
-        level: "low",
-        badge: "低",
-        badgeTone: "gray",
-        time: "14:28:05",
-        title: "孙同学 · 窗口切换 3 次",
-        desc: "切出考试页面 3 次，每次不足 5 秒；暂无外部模型调用。",
-        buttons: [
-            { label: "忽略", message: "已忽略孙同学的窗口切换告警" },
-            { label: "查看", message: "已打开孙同学的告警详情" },
-        ],
-    },
-];
-
-const HandleLogs: { text: string; sub: string }[] = [
-    { text: "14:36 为赵同学补时 2 分钟", sub: "理由：网络中断 42 秒 · 助教 张" },
-    { text: "14:30 警告王同学：请勿粘贴外部代码", sub: "处置人：监考 刘" },
-    { text: "14:10 重新分配容器给陈同学", sub: "原因：容器启动超时 · 自动恢复" },
-];
-
-/** 10 监考中心：在线考生状态、异常告警与处置记录 */
+/**
+ * 10 监考中心。
+ *
+ * 不带考试 ID 进入时列出可监考的考试；带 ID 时展示本场考情：
+ * 考生提交统计与实时提交动态（自动刷新）。异常告警与处置需要
+ * 监考探针接入，随后续迭代提供。
+ */
 export function ProctorPage() {
-    const { examId } = useParams<{ examId: string }>();
-    const exam = findExam(examId);
+    const { examId } = useParams<{ examId?: string }>();
+    const numeric = examId != null && /^\d+$/.test(examId) ? Number(examId) : null;
+    return numeric != null ? <ProctorDashboard examId={numeric}/> : <ProctorPicker/>;
+}
 
-    // 结束考试是不可逆操作，先在浏览器里二次确认，取消时拦下跳转
-    const handleEndExam = (event: React.MouseEvent<HTMLAnchorElement>) => {
-        if (!window.confirm("结束后考生将无法继续作答，确定结束本场考试吗？")) {
-            event.preventDefault();
-        }
+/** 监考首页：选择一场考试 */
+function ProctorPicker() {
+    const [exams, setExams] = useState<ExamSummary[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    const load = () => {
+        setLoading(true);
+        setError(null);
+        fetchExams({ status: "published" })
+            .then(result => {
+                setExams(result.exams);
+                setLoading(false);
+            })
+            .catch((e: ApiError) => {
+                setError(e.message);
+                setLoading(false);
+            });
     };
 
-    // 告警处置按钮：需要确认的先弹窗，确认后给出轻提示
-    const handleAlertButton = (button: AlertButton) => {
-        if (button.confirm && !window.confirm(button.confirm)) {
-            return;
-        }
-        toast(button.message, button.danger ? "warning" : "info");
-    };
+    useEffect(load, []);
 
     return (
-        <TeacherLayout breadcrumb={["工作台", "软件工程 · 2026 秋", "监考中心"]}>
+        <TeacherLayout breadcrumb={["工作台", "监考中心"]}>
             <div className="page-head">
                 <div>
                     <div className="page-title">监考中心</div>
-                    <div className="page-sub">{exam.title} · 进行中 · 14:32:26</div>
+                    <div className="page-sub">选择一场考试查看考情与提交动态</div>
                 </div>
                 <div className="page-actions">
-                    <span className="btn btn-secondary" onClick={() => toast("异常记录已导出")}>
-                        <Icon name="download" size={14}/>导出异常记录
-                    </span>
-                    <Link className="btn btn-danger" to={Routes.examManage} onClick={handleEndExam}>
-                        结束考试
+                    <Link className="btn btn-secondary" to={Routes.examManage}>
+                        <Icon name="arrow-left" size={14}/>返回考试管理
                     </Link>
                 </div>
             </div>
 
-            {/* 本场考试的四项实时指标 */}
-            <div className="stats-grid">
-                {ProctorStats.map(stat => (
-                    <div className="stat-card" key={stat.label}>
-                        <div className={"stat-icon" + (stat.tone ? " " + stat.tone : "")}>
-                            <Icon name={stat.icon} size={17}/>
-                        </div>
-                        <div>
-                            <div className="stat-value">{stat.value}</div>
-                            <div className="stat-label">{stat.label}</div>
-                        </div>
-                        {stat.trend && (
-                            <span className={"stat-trend " + (stat.trendTone || "")}>{stat.trend}</span>
-                        )}
+            <div className="card manage-card">
+                <div className="card-head">
+                    <div>
+                        <div className="card-title">已发布的考试</div>
+                        <div className="card-sub">共 {exams.length} 场</div>
                     </div>
-                ))}
-            </div>
-
-            <div className="proctor-main">
-                <div className="card candidate-card">
-                    <div className="card-head">
-                        <div>
-                            <div className="card-title">考生状态</div>
-                            <div className="card-sub">按告警级别与进度排序</div>
-                        </div>
-                        <div className="table-tools">
-                            <span className="search-box"><Icon name="search" size={13}/>搜索考生</span>
-                            <span className="btn btn-secondary btn-sm" onClick={() => toast("筛选面板尚未接入")}>
-                                <Icon name="filter" size={12}/>筛选
-                            </span>
-                        </div>
+                </div>
+                {error && (
+                    <div className="card-body" style={{ color: "#b91c1c", fontSize: 12 }}>
+                        <Icon name="alert-triangle" size={13}/> {error}
+                        <span className="link" style={{ marginLeft: 10 }} onClick={load}>重试</span>
                     </div>
-                    <table className="table">
-                        <thead>
-                        <tr>
-                            <th>考生</th>
-                            <th>状态</th>
-                            <th>进度</th>
-                            <th>提交</th>
-                            <th>AI 对话</th>
-                            <th>告警</th>
-                            <th>操作</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        {Candidates.map(candidate => (
-                            <tr key={candidate.studentNo}>
+                )}
+                <table className="table">
+                    <thead>
+                    <tr>
+                        <th>考试名称</th>
+                        <th>状态</th>
+                        <th>考试时间</th>
+                        <th>考生</th>
+                        <th>提交</th>
+                        <th>操作</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {loading && <tr><td colSpan={6} className="muted">加载中…</td></tr>}
+                    {!loading && exams.length === 0 && (
+                        <tr><td colSpan={6} className="muted">暂无进行中或待开始的考试</td></tr>
+                    )}
+                    {exams.map(exam => {
+                        const meta = StatusLabels[exam.studentStatus] || StatusLabels.upcoming;
+                        return (
+                            <tr key={exam.id}>
                                 <td>
-                                    <div className="candidate-name">
-                                        <div className="mini-avatar">{candidate.name.slice(0, 1)}</div>
-                                        <div>
-                                            <div className="strong">{candidate.name}</div>
-                                            <div className="candidate-sub">{candidate.studentNo}</div>
-                                        </div>
-                                    </div>
+                                    <div className="strong">{exam.title}</div>
+                                    <div className="sub">{exam.course || "未指定课程"} · {exam.problemCount} 道题</div>
                                 </td>
-                                <td>
-                                    <span className={"badge " + candidate.statusTone}>{candidate.status}</span>
-                                </td>
-                                <td>{candidate.progress}</td>
-                                <td>{candidate.submitCount}</td>
-                                <td>{candidate.aiRounds}</td>
-                                <td>
-                                    {candidate.alert
-                                        ? <span className={"badge " + candidate.alert.tone}>{candidate.alert.text}</span>
-                                        : <span className="muted">—</span>}
-                                </td>
-                                <td>
-                                    {candidate.alert
-                                        ? <span className="link"
-                                                onClick={() => toast("已通知监考处置 " + candidate.name)}>处置</span>
-                                        : <Link className="link" to={Routes.examReport(examId)}>查看</Link>}
-                                </td>
+                                <td><span className={"badge " + meta.badge}>{meta.label}</span></td>
+                                <td>{formatShort(exam.startTime)} – {formatShort(exam.endTime)}</td>
+                                <td>{exam.candidateCount}{exam.openToAll && <span className="muted">（全体）</span>}</td>
+                                <td>{exam.submissionCount}</td>
+                                <td><Link className="link" to={Routes.proctor(exam.id)}>进入监考</Link></td>
                             </tr>
-                        ))}
-                        </tbody>
-                    </table>
-                    <div className="table-footer">
-                        <span>在线 42 / 45 · 最近更新 14:32:26</span>
-                        <span className="link" onClick={() => toast("考生名单尚未接入")}>查看全部考生</span>
+                        );
+                    })}
+                    </tbody>
+                </table>
+            </div>
+        </TeacherLayout>
+    );
+}
+
+/** 单场考试的考情面板 */
+function ProctorDashboard({ examId }: { examId: number }) {
+    const [exam, setExam] = useState<ExamDetail | null>(null);
+    const [submissions, setSubmissions] = useState<ExamSubmissionEntry[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [keyword, setKeyword] = useState("");
+    const [filterStudent, setFilterStudent] = useState<string | null>(null);
+    const [updatedClock, setUpdatedClock] = useState<string>("--:--:--");
+    const [, setTick] = useState(0);
+
+    const load = () => {
+        setLoading(true);
+        setError(null);
+        Promise.all([fetchExam(examId), fetchExamSubmissions(examId)])
+            .then(([detail, result]) => {
+                setExam(detail);
+                setSubmissions(result.submissions);
+                setUpdatedClock(new Date().toTimeString().slice(0, 8));
+                setLoading(false);
+            })
+            .catch((e: ApiError) => {
+                setError(e.message);
+                setLoading(false);
+            });
+    };
+
+    useEffect(load, [examId]);
+
+    // 自动刷新提交动态；手动刷新共用同一个轻量请求
+    useEffect(() => {
+        if (!exam || error) {
+            return;
+        }
+        const timer = window.setInterval(() => {
+            fetchExamSubmissions(examId)
+                .then(result => {
+                    setSubmissions(result.submissions);
+                    setUpdatedClock(new Date().toTimeString().slice(0, 8));
+                })
+                .catch(() => {
+                    // 网络抖动不打断页面，等下一轮
+                });
+        }, RefreshIntervalMs);
+        return () => window.clearInterval(timer);
+    }, [examId, exam, error]);
+
+    // 剩余时间每秒刷新
+    useEffect(() => {
+        const timer = window.setInterval(() => setTick(value => value + 1), 1000);
+        return () => window.clearInterval(timer);
+    }, []);
+
+    const refreshSubmissions = () => {
+        fetchExamSubmissions(examId)
+            .then(result => {
+                setSubmissions(result.submissions);
+                setUpdatedClock(new Date().toTimeString().slice(0, 8));
+                toast("已刷新", "success");
+            })
+            .catch((e: ApiError) => toast(e.message, "warning"));
+    };
+
+    /** 名单内考生（或全体模式下的已提交考生）逐人统计 */
+    const stats = useMemo(() => groupByStudent(submissions), [submissions]);
+    const rows = useMemo(() => {
+        const base = exam && !exam.openToAll
+            ? exam.candidates.map(username => {
+                const found = stats.find(item => item.username === username);
+                return found || {
+                    username,
+                    nickname: username,
+                    submitCount: 0,
+                    problemCount: 0,
+                    lastCreated: "",
+                };
+            })
+            : stats;
+        const query = keyword.trim().toLowerCase();
+        const filtered = query
+            ? base.filter(row =>
+                row.username.toLowerCase().indexOf(query) >= 0 ||
+                row.nickname.toLowerCase().indexOf(query) >= 0)
+            : base;
+        // 有提交的在前，其次按最近提交时间倒序
+        return filtered.slice().sort((a, b) => {
+            if ((a.submitCount > 0) !== (b.submitCount > 0)) {
+                return a.submitCount > 0 ? -1 : 1;
+            }
+            return a.lastCreated < b.lastCreated ? 1 : -1;
+        });
+    }, [exam, stats, keyword]);
+
+    const feed = useMemo(
+        () => (filterStudent ? submissions.filter(item => item.username === filterStudent) : submissions),
+        [submissions, filterStudent]
+    );
+
+    const ongoing = exam?.studentStatus === "ongoing";
+    const remainingSeconds = exam ? secondsUntil(exam.endTime) : 0;
+    const submitters = stats.length;
+
+    const cards = [
+        { icon: "users" as const, tone: "green", value: exam ? (exam.openToAll ? "全体" : String(exam.candidateCount)) : "—", label: "考生" },
+        { icon: "arrow-up" as const, tone: "purple", value: String(submissions.length), label: "提交总数" },
+        { icon: "check-circle" as const, tone: "", value: String(submitters), label: "已提交考生" },
+        {
+            icon: "clock" as const,
+            tone: ongoing ? "amber" : "",
+            value: ongoing ? formatCountdown(remainingSeconds) : "已结束",
+            label: ongoing ? "距收卷" : "考试状态",
+        },
+    ];
+
+    return (
+        <TeacherLayout breadcrumb={["工作台", "监考中心"]}>
+            <div className="page-head">
+                <div>
+                    <div className="page-title">监考中心</div>
+                    <div className="page-sub">
+                        {exam ? `${exam.title} · ${StatusLabels[exam.studentStatus]?.label || exam.studentStatus}` : "加载中…"}
                     </div>
                 </div>
-
-                <div className="alert-side">
-                    <div className="card">
-                        <div className="card-head">
-                            <div className="card-title">异常告警</div>
-                            <span className="badge red">1 高 · 1 中 · 1 低</span>
-                        </div>
-                        <div className="card-body">
-                            {AlertItems.map((alert, index) => (
-                                <div key={alert.time}
-                                     className={"alert-item " + alert.level
-                                         + (index === AlertItems.length - 1 ? " last" : "")}>
-                                    <div className="alert-top">
-                                        <span className={"badge " + alert.badgeTone}>{alert.badge}</span>
-                                        <span className="alert-time">{alert.time}</span>
-                                    </div>
-                                    <div className="alert-title">{alert.title}</div>
-                                    <div className="alert-desc">{alert.desc}</div>
-                                    <div className="alert-actions">
-                                        {alert.buttons.map(button => (
-                                            <span key={button.label}
-                                                  className={"btn btn-sm " + (button.danger ? "btn-danger" : "btn-secondary")}
-                                                  onClick={() => handleAlertButton(button)}>
-                                                {button.label}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="card">
-                        <div className="card-head">
-                            <div className="card-title">处置记录</div>
-                            <span className="link" onClick={() => toast("全部处置记录尚未接入")}>查看全部</span>
-                        </div>
-                        <div className="card-body">
-                            {HandleLogs.map((log, index) => (
-                                <div key={log.text}
-                                     className={"log-item" + (index === HandleLogs.length - 1 ? " last" : "")}>
-                                    <span className="log-dot"/>
-                                    <div>
-                                        <div className="log-text">{log.text}</div>
-                                        <div className="log-sub">{log.sub}</div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
+                <div className="page-actions">
+                    <span className="btn btn-secondary" onClick={() => exam && exportCsv(exam, submissions)}>
+                        <Icon name="download" size={14}/>导出提交记录
+                    </span>
+                    <Link className="btn btn-ghost" to={Routes.proctorHome}>
+                        <Icon name="arrow-left" size={14}/>切换考试
+                    </Link>
                 </div>
             </div>
+
+            {error && (
+                <div className="card" style={{ borderColor: "#fecaca", marginBottom: 14 }}>
+                    <div className="card-body" style={{ color: "#b91c1c", fontSize: 12 }}>
+                        <Icon name="alert-triangle" size={13}/> {error}
+                        <span className="link" style={{ marginLeft: 10 }} onClick={load}>重试</span>
+                        {" · "}
+                        <Link className="link" to={Routes.proctorHome}>返回选择考试</Link>
+                    </div>
+                </div>
+            )}
+
+            {loading && !exam && (
+                <div className="card"><div className="card-body muted">加载中…</div></div>
+            )}
+
+            {exam && (
+                <>
+                    <div className="stats-grid">
+                        {cards.map(card => (
+                            <div className="stat-card" key={card.label}>
+                                <div className={"stat-icon" + (card.tone ? " " + card.tone : "")}>
+                                    <Icon name={card.icon} size={17}/>
+                                </div>
+                                <div>
+                                    <div className="stat-value">{card.value}</div>
+                                    <div className="stat-label">{card.label}</div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="proctor-main">
+                        <div className="card candidate-card">
+                            <div className="card-head">
+                                <div>
+                                    <div className="card-title">考生提交状态</div>
+                                    <div className="card-sub">
+                                        {exam.openToAll
+                                            ? "本场面向全体学生，下表为已有提交的考生"
+                                            : "按提交时间倒序；未提交的考生排在后面"}
+                                    </div>
+                                </div>
+                                <div className="table-tools">
+                                    <input className="input" placeholder="搜索考生"
+                                           style={{ width: 150, height: 28, fontSize: 11.5 }}
+                                           value={keyword} onChange={e => setKeyword(e.target.value)}/>
+                                </div>
+                            </div>
+                            <table className="table">
+                                <thead>
+                                <tr>
+                                    <th>考生</th>
+                                    <th>提交次数</th>
+                                    <th>涉及题目</th>
+                                    <th>最近提交</th>
+                                    <th>操作</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                {rows.length === 0 && (
+                                    <tr>
+                                        <td colSpan={5} className="muted" style={{ textAlign: "center" }}>
+                                            {exam.openToAll ? "暂无考生提交" : "没有匹配的考生"}
+                                        </td>
+                                    </tr>
+                                )}
+                                {rows.map(row => (
+                                    <tr key={row.username}>
+                                        <td>
+                                            <div className="candidate-name">
+                                                <div className="mini-avatar">{row.nickname.slice(0, 1)}</div>
+                                                <div>
+                                                    <div className="strong">{row.nickname}</div>
+                                                    <div className="candidate-sub">{row.username}</div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            {row.submitCount > 0
+                                                ? <span className="strong">{row.submitCount}</span>
+                                                : <span className="muted">未提交</span>}
+                                        </td>
+                                        <td>{row.problemCount > 0 ? `${row.problemCount} / ${exam.problemCount}` : "—"}</td>
+                                        <td>{row.lastCreated ? formatDateTime(row.lastCreated) : "—"}</td>
+                                        <td>
+                                            <span className="link" onClick={() => setFilterStudent(row.username)}>
+                                                查看提交
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                                </tbody>
+                            </table>
+                            <div className="table-footer">
+                                <span>共 {rows.length} 人 · 最近更新 {updatedClock}</span>
+                                <span className="muted">每 15 秒自动刷新</span>
+                            </div>
+                        </div>
+
+                        <div className="alert-side">
+                            <div className="card">
+                                <div className="card-head">
+                                    <div className="card-title">提交动态</div>
+                                    <div className="table-tools">
+                                        {filterStudent && (
+                                            <span className="link" style={{ marginRight: 10 }}
+                                                  onClick={() => setFilterStudent(null)}>
+                                                清除筛选
+                                            </span>
+                                        )}
+                                        <span className="btn btn-secondary btn-sm" onClick={refreshSubmissions}>
+                                            <Icon name="refresh" size={12}/>刷新
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="card-body" style={{ maxHeight: 420, overflowY: "auto" }}>
+                                    {filterStudent && (
+                                        <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
+                                            只看 {filterStudent} 的提交
+                                        </div>
+                                    )}
+                                    {feed.length === 0 && (
+                                        <div className="muted" style={{ fontSize: 11.5 }}>暂无提交记录</div>
+                                    )}
+                                    {feed.slice(0, 30).map(item => (
+                                        <div className="log-item" key={item.id}>
+                                            <span className="log-dot green"/>
+                                            <div>
+                                                <div className="log-text">
+                                                    {item.nickname}（{item.username}）提交了「{item.problemTitle}」
+                                                </div>
+                                                <div className="log-sub">
+                                                    {formatDateTime(item.created)} · {item.language} · 待判定
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="card tip-card">
+                                <div className="tip-icon"><Icon name="shield-check" size={15}/></div>
+                                <div>
+                                    <div className="tip-title">异常告警随监考探针接入</div>
+                                    <div className="tip-desc">
+                                        粘贴检测、窗口切换、断线补时等监考能力依赖考场探针，将在后续迭代提供。
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </>
+            )}
         </TeacherLayout>
     );
 }

@@ -30,11 +30,10 @@ function statusMeta(exam: ExamSummary): { label: string; badge: string } {
     return { label: "已结束", badge: "gray" };
 }
 
-type Tab = "list" | "scores" | "archive";
+type Tab = "list" | "archive";
 
 const Tabs: { key: Tab; label: string }[] = [
     { key: "list", label: "考试列表" },
-    { key: "scores", label: "成绩分析" },
     { key: "archive", label: "归档" },
 ];
 
@@ -42,7 +41,7 @@ const Tabs: { key: Tab; label: string }[] = [
  * 07 考试管理：真实数据。
  *
  * 闭环操作：创建（草稿）→ 组卷 → 名单 → 发布 → （结束）归档；
- * 监考与成绩报告仍是原型演示页，随后续迭代接入。
+ * 已结束考试的提交记录跳转监考中心查看；成绩分析随评测服务接入。
  */
 export function ExamManagePage() {
     const [tab, setTab] = useState<Tab>("list");
@@ -171,12 +170,7 @@ export function ExamManagePage() {
                     </div>
                 )}
 
-                {tab === "scores" ? (
-                    <div className="card-body muted" style={{ textAlign: "center", padding: 32 }}>
-                        成绩分析与过程评分随判题服务接入后开放（迭代计划第三、四轮）
-                    </div>
-                ) : (
-                    <table className="table">
+                <table className="table">
                         <thead>
                         <tr>
                             <th>考试名称</th>
@@ -252,19 +246,18 @@ export function ExamManagePage() {
                                             <>
                                                 <span className="link" onClick={() => runAction(exam, "archive")}>归档</span>
                                                 <span className="muted"> · </span>
-                                                <Link className="link" to={Routes.examReport(exam.id)}>报告</Link>
+                                                <Link className="link" to={Routes.proctor(exam.id)}>提交记录</Link>
                                             </>
                                         )}
                                         {exam.status === "archived" && (
-                                            <Link className="link" to={Routes.examReport(exam.id)}>报告</Link>
+                                            <Link className="link" to={Routes.proctor(exam.id)}>提交记录</Link>
                                         )}
                                     </td>
                                 </tr>
                             );
                         })}
                         </tbody>
-                    </table>
-                )}
+                </table>
                 <div className="table-footer">
                     <span>共 {exams.length} 场考试 · 当前显示 {visible.length} 场</span>
                     <span className="muted">发布前请完成组卷；开始后配置冻结</span>

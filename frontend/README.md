@@ -44,12 +44,12 @@ src/
 ├── api/           后端接口（client.ts：认证 / 账号 / 题库 / 考试；urls.ts：接口与路由常量；format.ts：时间格式化）
 ├── components/    公共组件（Brand、Icon、Toast、CodeEditor=Monaco 封装）
 ├── layouts/       两端外壳：StudentLayout（顶部导航）、TeacherLayout（侧边栏 + 顶栏）
-├── mock/          演示数据（成绩报告 / 提交结果 / 监考页与工作台终端、Agent 仍取自此处的演示数据）
+├── mock/          演示数据（仅剩工作台终端与 Agent 会话；其余页面均为真实接口数据）
 ├── pages/         页面
 │   ├── LoginPage.tsx
 │   ├── RegisterPage.tsx
-│   ├── student/   02 我的考试、03 考试须知、04 做题工作台、05 提交结果、06 成绩报告
-│   └── teacher/   07 考试管理、08 创建考试、09 题目配置、10 监考中心、题库管理、账号管理
+│   ├── student/   02 我的考试、03 考试须知、04 做题工作台、05 提交结果、06 成绩报告（+ /reports 报告列表）
+│   └── teacher/   07 考试管理、08 创建考试、09 题目配置、10 监考中心（+ /manage/proctor 选考页）、题库管理、账号管理
 ├── styles/        prototype.css（设计系统）、workbench.css（工作台，作用域 .wb-root）、app.css（布局自适应）
 ├── roles.ts       角色定义与角色首页
 └── store.ts       Redux store（token + user）
@@ -66,11 +66,12 @@ src/
 | 04 做题工作台 | `/exams/:examId/workbench` | 学生 |
 | 05 提交结果 | `/exams/:examId/result` | 学生 |
 | 06 成绩报告 | `/exams/:examId/report` | 学生 |
+| 06 报告列表 | `/reports` | 学生 |
 | 07 考试管理 | `/manage` | 教师 / 管理员 |
 | 08 创建考试 | `/manage/new` | 教师 / 管理员 |
 | 08 编辑考试 | `/manage/:examId/edit` | 教师 / 管理员 |
 | 09 组卷 | `/manage/:examId/problems` | 教师 / 管理员 |
-| 10 监考中心 | `/manage/:examId/proctor` | 教师 / 管理员 |
+| 10 监考中心 | `/manage/proctor`（选考）→ `/manage/:examId/proctor` | 教师 / 管理员 |
 | 题库管理 | `/manage/problems` | 教师 / 管理员 |
 | 账号管理 | `/manage/accounts` | 管理员 |
 
@@ -87,17 +88,16 @@ src/
   可切换当前文件的高亮语言（默认按题目判题语言）
 - 代码草稿按考试自动保存到浏览器 `localStorage`（约 0.8s 防抖），刷新页面不丢失
 - 「提交答卷」按题校验提交次数（上限由考试配置），当前只收卷存档
-  （`status=pending`），判定结果与运行测试随判题服务接入
-- 终端与 Coding Agent 面板为本地演示数据，运行环境与 Agent 服务在后续迭代接入
+  （`status=pending`），判定结果与运行测试随判题服务接入；提交成功后进入
+  05 提交结果页
+- 侧边栏「保存草稿」可立即写入本地草稿；终端「测试 / 输出 / 问题」页签可切换，
+  「清屏」清空当前内容（测试页签为演示数据，输出 / 问题随判题容器接入）
+- Coding Agent 面板为本地演示会话，Agent 服务在后续迭代接入
 
-## 演示模式（临时）
+## 演示模式
 
-后端只有登录接口，本地库还需要先建表建号。为了方便只看界面，登录页底部在
-**开发环境**下多了一个「以学生身份预览 / 以教师身份预览」入口（`src/demo.ts`），
-它不请求后端，直接把内置账号写进本地存储，用于逐页对照原型。
-
-正式联调 / 上线前删除：删掉 `src/demo.ts`、`LoginPage.tsx` 中的入口与 `App.tsx`
-中对应的分支即可。
+已删除（`src/demo.ts`）：所有页面均使用真实后端接口，本地体验请先启动后端并
+用种子账号登录（见 `backend/README.md` 的 `init_db` 说明）。
 
 ## 与后端的关系
 
@@ -128,12 +128,12 @@ src/
 令牌保存在 `localStorage`，请求时原样放在 `Authorization` 头里（不带 `Bearer` 前缀）。
 除认证外的入口（账号、导入、审计、题库、考试）统一走 `client.ts` 的 `request()`，
 非 2xx 抛 `ApiError`，页面 catch 后展示错误与重试。
-仍使用演示数据的页面：提交结果（05）、成绩报告（06）、监考中心（10），
-以及工作台的终端与 Agent 会话，接口就绪后替换对应 `mock` 引用即可。
+仍使用演示数据的部分：工作台的终端「测试」页签与 Agent 会话（`src/mock/workbench.ts`），
+接口就绪后替换对应 `mock` 引用即可。提交结果（05）、成绩报告（06）、监考中心（10）
+均为真实提交记录数据，评测服务接入前不展示分数（统一显示「待判定」）。
 
 ## 后续工作
 
-- 教师端侧边栏的成绩分析、考生名单、镜像与资源、系统设置尚未实现，入口保留但不可跳转。
 - 找回密码、教师子角色（命题人 / 监考 / 面试官）权限细分尚未实现。
 - 工作台的运行测试 / 终端输出 / Agent 会话仍是演示数据，等待沙箱与 Agent 服务接入。
 - 成绩与判定结果展示（05 / 06 / 成绩分析）随判题服务接入（迭代计划第三、四轮）。

@@ -12,6 +12,7 @@ import { PrecheckPage } from "./pages/student/PrecheckPage";
 import { WorkbenchPage } from "./pages/student/WorkbenchPage";
 import { ResultPage } from "./pages/student/ResultPage";
 import { ReportPage } from "./pages/student/ReportPage";
+import { ReportsPage } from "./pages/student/ReportsPage";
 import { ExamManagePage } from "./pages/teacher/ExamManagePage";
 import { ExamCreatePage } from "./pages/teacher/ExamCreatePage";
 import { ProblemConfigPage } from "./pages/teacher/ProblemConfigPage";
@@ -20,7 +21,6 @@ import { ProblemBankPage } from "./pages/teacher/ProblemBankPage";
 import { AccountsPage } from "./pages/teacher/AccountsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { ToastHost } from "./components/Toast";
-import { isDemo, loadDemoUser } from "./demo";
 
 /**
  * 登录 + 角色校验：未登录跳登录页，角色不在允许列表内则回到该角色首页
@@ -59,16 +59,10 @@ export function App() {
     const dispatch = useDispatch();
     const [booting, setBooting] = useState(!!token && !user);
 
-    // 刷新页面后，用本地令牌换回当前用户信息；演示模式直接读本地演示用户
+    // 刷新页面后，用本地令牌换回当前用户信息
     useEffect(() => {
         let alive = true;
-        if (token && !user && isDemo()) {
-            const demoUser = loadDemoUser();
-            if (demoUser) {
-                dispatch(userSlice.actions.updateUserStatus(demoUser));
-            }
-            setBooting(false);
-        } else if (token && !user) {
+        if (token && !user) {
             setBooting(true);
             fetchUser()
                 .then(result => {
@@ -109,6 +103,8 @@ export function App() {
 
             <Route exact path={Routes.examList}
                    render={() => <RequireRole roles={["student"]}><ExamListPage/></RequireRole>}/>
+            <Route exact path={Routes.reports}
+                   render={() => <RequireRole roles={["student"]}><ReportsPage/></RequireRole>}/>
             <Route exact path="/exams/:examId/precheck"
                    render={() => <RequireRole roles={["student"]}><PrecheckPage/></RequireRole>}/>
             <Route exact path="/exams/:examId/workbench"
@@ -127,6 +123,8 @@ export function App() {
             <Route exact path="/manage/:examId/problems"
                    render={() => <RequireRole roles={["teacher", "admin"]}><ProblemConfigPage/></RequireRole>}/>
             <Route exact path="/manage/:examId/proctor"
+                   render={() => <RequireRole roles={["teacher", "admin"]}><ProctorPage/></RequireRole>}/>
+            <Route exact path={Routes.proctorHome}
                    render={() => <RequireRole roles={["teacher", "admin"]}><ProctorPage/></RequireRole>}/>
             <Route exact path={Routes.problemBank}
                    render={() => <RequireRole roles={["teacher", "admin"]}><ProblemBankPage/></RequireRole>}/>
