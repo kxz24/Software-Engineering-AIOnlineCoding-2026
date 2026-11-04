@@ -16,6 +16,20 @@ export const Urls = {
 
     problems: "/api/v1/problems", // GET 教师列表 / POST 创建
     problemDetail: (problemId: number) => `/api/v1/problems/${problemId}`, // GET / PATCH / DELETE
+
+    exams: "/api/v1/exams", // GET 教师 / POST 创建
+    examDetail: (examId: number) => `/api/v1/exams/${examId}`, // GET / PATCH / DELETE
+    examProblems: (examId: number) => `/api/v1/exams/${examId}/problems`, // PUT 组卷
+    examCandidates: (examId: number) => `/api/v1/exams/${examId}/candidates`, // PUT 名单
+    examAction: (examId: number, action: "publish" | "withdraw" | "archive") =>
+        `/api/v1/exams/${examId}/${action}`, // POST 状态流转
+    examSubmissions: (examId: number) => `/api/v1/exams/${examId}/submissions`, // GET 提交记录
+
+    myExams: "/api/v1/my/exams", // GET 学生
+    myExamDetail: (examId: number) => `/api/v1/my/exams/${examId}`, // GET
+    myExamSubmissions: (examId: number) => `/api/v1/my/exams/${examId}/submissions`, // GET
+    mySubmission: (examId: number, problemId: number) =>
+        `/api/v1/my/exams/${examId}/problems/${problemId}/submissions`, // GET / POST
 };
 
 /**
@@ -37,6 +51,7 @@ export const Routes = {
 
     examManage: "/manage",
     examCreate: "/manage/new",
+    examEdit: (examId: string | number) => `/manage/${examId}/edit`,
     problemConfig: (examId: string | number) => `/manage/${examId}/problems`,
     proctor: (examId: string | number) => `/manage/${examId}/proctor`,
 

@@ -122,6 +122,8 @@ export function App() {
                    render={() => <RequireRole roles={["teacher", "admin"]}><ExamManagePage/></RequireRole>}/>
             <Route exact path={Routes.examCreate}
                    render={() => <RequireRole roles={["teacher", "admin"]}><ExamCreatePage/></RequireRole>}/>
+            <Route exact path="/manage/:examId/edit"
+                   render={() => <RequireRole roles={["teacher", "admin"]}><ExamCreatePage/></RequireRole>}/>
             <Route exact path="/manage/:examId/problems"
                    render={() => <RequireRole roles={["teacher", "admin"]}><ProblemConfigPage/></RequireRole>}/>
             <Route exact path="/manage/:examId/proctor"

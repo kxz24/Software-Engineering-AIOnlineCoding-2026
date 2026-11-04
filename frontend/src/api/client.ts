@@ -394,6 +394,229 @@ export function deleteProblem(problemId: number): Promise<{ message: string }> {
     return request(Urls.problemDetail(problemId), { method: "DELETE" });
 }
 
+// ---------------------------------------------------------------------------
+// 考试管理（教师 / 管理端）
+// ---------------------------------------------------------------------------
+
+/** 管理端考试列表条目 */
+export interface ExamSummary {
+    id: number;
+    title: string;
+    course: string;
+    /** 后端状态：draft / published / archived */
+    status: "draft" | "published" | "archived";
+    /** 按时间推导的学生侧状态：upcoming / ongoing / finished */
+    studentStatus: "upcoming" | "ongoing" | "finished";
+    startTime: string | null;
+    endTime: string | null;
+    durationMinutes: number;
+    submitLimit: number;
+    aiMode: string;
+    problemCount: number;
+    candidateCount: number;
+    openToAll: boolean;
+    submissionCount: number;
+    updated: string;
+}
+
+/** 组卷条目 */
+export interface ExamProblemEntry {
+    problemId: number;
+    order: number;
+    score: number;
+    title: string;
+    type: string;
+    language: string;
+    difficulty: string;
+    sampleCount: number;
+    hiddenCount: number;
+}
+
+/** 管理端考试详情 */
+export interface ExamDetail extends ExamSummary {
+    description: string;
+    notice: string;
+    createdBy: string;
+    problems: ExamProblemEntry[];
+    candidates: string[];
+}
+
+/** 创建 / 编辑考试的载荷 */
+export interface ExamPayload {
+    title: string;
+    course: string;
+    description: string;
+    notice: string;
+    startTime: string;
+    endTime: string;
+    durationMinutes: number;
+    submitLimit: number;
+    aiMode: string;
+}
+
+/** 考试列表（教师 / 管理员） */
+export function fetchExams(query: { status?: string } = {}): Promise<{ exams: ExamSummary[] }> {
+    return request(Urls.exams, { query: { status: query.status } });
+}
+
+/** 考试详情（含组卷与名单） */
+export function fetchExam(examId: number): Promise<ExamDetail> {
+    return request(Urls.examDetail(examId));
+}
+
+/** 创建考试（保存为草稿） */
+export function createExam(payload: Partial<ExamPayload>): Promise<ExamDetail> {
+    return request(Urls.exams, { method: "POST", body: payload });
+}
+
+/** 编辑考试（传空串可清除时间） */
+export function updateExam(examId: number, payload: Partial<ExamPayload>): Promise<ExamDetail> {
+    return request(Urls.examDetail(examId), { method: "PATCH", body: payload });
+}
+
+/** 删除考试（仅草稿） */
+export function deleteExam(examId: number): Promise<{ message: string }> {
+    return request(Urls.examDetail(examId), { method: "DELETE" });
+}
+
+/** 组卷：整体替换题目与分值，顺序即题序 */
+export function setExamProblems(
+    examId: number,
+    problems: { problemId: number; score: number }[]
+): Promise<ExamDetail> {
+    return request(Urls.examProblems(examId), { method: "PUT", body: { problems } });
+}
+
+/** 考生名单：传空数组表示全体学生 */
+export function setExamCandidates(examId: number, candidates: string[]): Promise<ExamDetail> {
+    return request(Urls.examCandidates(examId), { method: "PUT", body: { candidates } });
+}
+
+/** 发布 / 撤回 / 归档 */
+export function examAction(
+    examId: number,
+    action: "publish" | "withdraw" | "archive"
+): Promise<ExamDetail> {
+    return request(Urls.examAction(examId, action), { method: "POST", body: {} });
+}
+
+/** 管理端提交记录条目 */
+export interface ExamSubmissionEntry {
+    id: number;
+    examId: number;
+    problemId: number;
+    problemTitle: string;
+    username: string;
+    nickname: string;
+    language: string;
+    status: string;
+    created: string;
+}
+
+/** 本场考试的提交记录（可按题过滤） */
+export function fetchExamSubmissions(
+    examId: number,
+    problemId?: number
+): Promise<{ submissions: ExamSubmissionEntry[]; total: number }> {
+    return request(Urls.examSubmissions(examId), {
+        query: { problemId: problemId === undefined ? undefined : String(problemId) },
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 考试作答（学生侧）
+// ---------------------------------------------------------------------------
+
+/** 学生侧考试列表条目（在管理端字段之上多一个我的提交数） */
+export interface MyExamSummary extends ExamSummary {
+    mySubmissions: number;
+}
+
+/** 学生可见的样例测试 */
+export interface StudentSample {
+    name: string;
+    input: string;
+    expected: string;
+}
+
+/** 学生视角的题目：题面 + 初始代码 + 样例测试（无隐藏测试） */
+export interface StudentProblem {
+    problemId: number;
+    order: number;
+    score: number;
+    title: string;
+    type: string;
+    language: string;
+    difficulty: string;
+    description: string;
+    starterCode: string;
+    samples: StudentSample[];
+}
+
+/** 学生侧考试详情 */
+export interface StudentExamDetail {
+    id: number;
+    title: string;
+    course: string;
+    description: string;
+    notice: string;
+    status: "upcoming" | "ongoing" | "finished";
+    startTime: string | null;
+    endTime: string | null;
+    durationMinutes: number;
+    submitLimit: number;
+    aiMode: string;
+    problems: StudentProblem[];
+}
+
+/** 学生侧提交记录（含代码正文） */
+export interface MySubmission {
+    id: number;
+    examId: number;
+    problemId: number;
+    problemTitle: string;
+    language: string;
+    status: string;
+    created: string;
+    code: string;
+}
+
+/** 我的考试列表 */
+export function fetchMyExams(): Promise<{ exams: MyExamSummary[] }> {
+    return request(Urls.myExams);
+}
+
+/** 考试详情（题面 + 样例 + 初始代码） */
+export function fetchMyExam(examId: number): Promise<StudentExamDetail> {
+    return request(Urls.myExamDetail(examId));
+}
+
+/** 我在本场考试的提交记录 */
+export function fetchMyExamSubmissions(examId: number): Promise<{ submissions: MySubmission[] }> {
+    return request(Urls.myExamSubmissions(examId));
+}
+
+/** 我对某题的提交历史 */
+export function fetchMyProblemSubmissions(
+    examId: number,
+    problemId: number
+): Promise<{ submissions: MySubmission[] }> {
+    return request(Urls.mySubmission(examId, problemId));
+}
+
+/** 提交代码（当前只收卷存档，判题服务接入后返回判定结果） */
+export function submitCode(
+    examId: number,
+    problemId: number,
+    code: string,
+    language?: string
+): Promise<{ submission: { id: number; problemId: number; status: string; created: string }; used: number; remaining: number }> {
+    return request(Urls.mySubmission(examId, problemId), {
+        method: "POST",
+        body: { code, language },
+    });
+}
+
 /** 当前令牌 */
 export function getToken(): string | null {
     return localStorage.getItem("token");
