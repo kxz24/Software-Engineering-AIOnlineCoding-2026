@@ -26,7 +26,7 @@ npm test -- --watchAll=false  # 页面冒烟测试（src/pages.smoke.test.tsx）
 
 ```bash
 cd backend
-python manage.py makemigrations user problem   # 迁移文件被 backend/.gitignore 忽略，需各自本地生成
+python manage.py makemigrations user problem exam   # 迁移文件被 backend/.gitignore 忽略，需各自本地生成
 python manage.py migrate
 python manage.py runserver 127.0.0.1:8000
 ```
@@ -41,10 +41,10 @@ Monaco Editor 的运行时资源不进仓库：`npm install` 时 `postinstall` �
 
 ```text
 src/
-├── api/           后端接口（client.ts：认证 / 账号管理 / 题库；urls.ts：接口与路由常量）
+├── api/           后端接口（client.ts：认证 / 账号 / 题库 / 考试；urls.ts：接口与路由常量；format.ts：时间格式化）
 ├── components/    公共组件（Brand、Icon、Toast、CodeEditor=Monaco 封装）
 ├── layouts/       两端外壳：StudentLayout（顶部导航）、TeacherLayout（侧边栏 + 顶栏）
-├── mock/          演示数据（接口未就绪时页面从这里取数）
+├── mock/          演示数据（成绩报告 / 提交结果 / 监考页与工作台终端、Agent 仍取自此处的演示数据）
 ├── pages/         页面
 │   ├── LoginPage.tsx
 │   ├── RegisterPage.tsx
@@ -68,7 +68,8 @@ src/
 | 06 成绩报告 | `/exams/:examId/report` | 学生 |
 | 07 考试管理 | `/manage` | 教师 / 管理员 |
 | 08 创建考试 | `/manage/new` | 教师 / 管理员 |
-| 09 题目配置 | `/manage/:examId/problems` | 教师 / 管理员 |
+| 08 编辑考试 | `/manage/:examId/edit` | 教师 / 管理员 |
+| 09 组卷 | `/manage/:examId/problems` | 教师 / 管理员 |
 | 10 监考中心 | `/manage/:examId/proctor` | 教师 / 管理员 |
 | 题库管理 | `/manage/problems` | 教师 / 管理员 |
 | 账号管理 | `/manage/accounts` | 管理员 |
@@ -80,11 +81,14 @@ src/
 
 ## 做题工作台（04）
 
+- 数据来自 `/api/v1/my/exams/:id`：题面、样例测试与初始代码由后端下发
+  （隐藏测试不会下发到浏览器），左侧文件树按题目切换当前作答文件
 - 代码区为 Monaco Editor：Python / C / C++ / Java 等语言语法高亮，编辑器右上角
-  可切换当前文件的高亮语言（默认按文件扩展名自动推断）
-- 多文件标签共用一个编辑器实例，切换文件时保留各文件的撤销历史与光标位置
-- 代码草稿按考试自动保存到浏览器 `localStorage`（约 0.8s 防抖），刷新页面不丢失；
-  后端保存接口就绪后替换为服务端保存
+  可切换当前文件的高亮语言（默认按题目判题语言）
+- 代码草稿按考试自动保存到浏览器 `localStorage`（约 0.8s 防抖），刷新页面不丢失
+- 「提交答卷」按题校验提交次数（上限由考试配置），当前只收卷存档
+  （`status=pending`），判定结果与运行测试随判题服务接入
+- 终端与 Coding Agent 面板为本地演示数据，运行环境与 Agent 服务在后续迭代接入
 
 ## 演示模式（临时）
 
@@ -111,15 +115,25 @@ src/
 | `/api/v1/audit` | GET | 审计日志（登录与账号 / 题库操作），仅管理员 |
 | `/api/v1/problems` | GET / POST | 题库列表（关键字 / 题型 / 语言筛选）、创建题目，教师 / 管理员 |
 | `/api/v1/problems/:id` | GET / PATCH / DELETE | 题目详情、编辑（含测试样例整体替换）、删除，教师 / 管理员 |
+| `/api/v1/exams` | GET / POST | 考试列表（`status` 筛选）、创建考试（草稿），教师 / 管理员 |
+| `/api/v1/exams/:id` | GET / PATCH / DELETE | 考试详情、编辑（开始后冻结）、删除（仅草稿），教师 / 管理员 |
+| `/api/v1/exams/:id/problems` | PUT | 组卷：整体替换题目与分值（顺序即题序），教师 / 管理员 |
+| `/api/v1/exams/:id/candidates` | PUT | 考生名单（空数组 = 全体学生），教师 / 管理员 |
+| `/api/v1/exams/:id/publish · withdraw · archive` | POST | 发布 / 撤回（开始前）/ 归档（结束后），教师 / 管理员 |
+| `/api/v1/exams/:id/submissions` | GET | 本场考试提交记录（`problemId` 过滤），教师 / 管理员 |
+| `/api/v1/my/exams` | GET | 我的考试列表，学生 |
+| `/api/v1/my/exams/:id` | GET | 考试详情：题面 + 样例 + 初始代码（无隐藏测试），学生 |
+| `/api/v1/my/exams/:id/problems/:pid/submissions` | GET / POST | 某题提交历史（含代码）/ 提交答卷（只收卷，按题限次），学生 |
 
 令牌保存在 `localStorage`，请求时原样放在 `Authorization` 头里（不带 `Bearer` 前缀）。
-除认证外的四个入口（账号、导入、审计、题库）统一走 `client.ts` 的 `request()`，
+除认证外的入口（账号、导入、审计、题库、考试）统一走 `client.ts` 的 `request()`，
 非 2xx 抛 `ApiError`，页面 catch 后展示错误与重试。
-其余页面（考试、成绩、监考）的数据来自 `src/mock/`，接口就绪后把对应的
-`mock` 引用替换成 `fetch` 调用即可，页面组件不需要改结构。
+仍使用演示数据的页面：提交结果（05）、成绩报告（06）、监考中心（10），
+以及工作台的终端与 Agent 会话，接口就绪后替换对应 `mock` 引用即可。
 
 ## 后续工作
 
 - 教师端侧边栏的成绩分析、考生名单、镜像与资源、系统设置尚未实现，入口保留但不可跳转。
 - 找回密码、教师子角色（命题人 / 监考 / 面试官）权限细分尚未实现。
 - 工作台的运行测试 / 终端输出 / Agent 会话仍是演示数据，等待沙箱与 Agent 服务接入。
+- 成绩与判定结果展示（05 / 06 / 成绩分析）随判题服务接入（迭代计划第三、四轮）。

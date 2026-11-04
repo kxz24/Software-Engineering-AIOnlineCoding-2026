@@ -1,47 +1,64 @@
-import React, { useEffect, useRef, useState } from "react";
-import { useHistory, useParams } from "react-router-dom";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useHistory, useParams } from "react-router-dom";
+import { useSelector } from "react-redux";
 import { Icon } from "../../components/Icon";
 import { CodeEditor, LanguageOptions, languageForPath } from "../../components/CodeEditor";
+import { toast } from "../../components/Toast";
 import { Routes } from "../../api/urls";
-import { findExam, formatCountdown } from "../../mock/exams";
+import { formatCountdown, secondsUntil } from "../../api/format";
+import { Store } from "../../store";
 import {
-    AgentMessages,
-    AgentPlaceholder,
-    CannedReplies,
-    DefaultModifiedPaths,
-    DefaultOpenPaths,
-    RemainingSeconds,
-    SampleTabNotes,
-    SubmissionTabNotes,
-    TerminalLines,
-    TimelineItems,
-    WorkspaceEntries,
-    WorkspaceFiles,
-    formatClock,
-    workspaceFileName,
-} from "../../mock/workbench";
+    ApiError,
+    fetchMyExam,
+    fetchMyExamSubmissions,
+    MySubmission,
+    StudentExamDetail,
+    StudentProblem,
+    submitCode,
+} from "../../api/client";
+import { AgentPlaceholder, CannedReplies, TerminalLines, formatClock } from "../../mock/workbench";
 
 type ProblemTabKey = "statement" | "samples" | "submissions";
 
-/** 题目区顶部标签（数量取自原型） */
-const ProblemTabs: { key: ProblemTabKey; label: string; count?: number }[] = [
+/** 题目区顶部标签（数量按当前题目动态计算） */
+const ProblemTabs: { key: ProblemTabKey; label: string }[] = [
     { key: "statement", label: "题目说明" },
-    { key: "samples", label: "样例测试", count: 10 },
-    { key: "submissions", label: "提交记录", count: 1 },
+    { key: "samples", label: "样例测试" },
+    { key: "submissions", label: "提交记录" },
 ];
+
+const TypeLabels: Record<string, string> = { engineering: "工程题", algorithm: "算法题" };
+const DifficultyLabels: Record<string, string> = { easy: "简单", medium: "中等", hard: "困难" };
+const AiModeLabels: Record<string, string> = { limited: "受限", open: "开放", closed: "关闭" };
+
+/** 判题语言 → 文件扩展名（与 problem 模型的 LANGUAGE_CHOICES 对应） */
+const LanguageExtensions: Record<string, string> = { python: "py", cpp: "cpp", c: "c", java: "java" };
+
+/** 一道题在工作区里的文件名：p1_标题短语.py */
+function problemPath(problem: StudentProblem): string {
+    const extension = LanguageExtensions[problem.language] || "txt";
+    const slug = problem.title.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 24);
+    return `p${problem.order + 1}_${slug}.${extension}`;
+}
+
+/** ISO 时间 → HH:MM:SS（时间线 / 提交记录用） */
+function timeOf(iso: string): string {
+    const date = new Date(iso);
+    if (isNaN(date.getTime())) {
+        return "--:--:--";
+    }
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
 
 /** 本地草稿的结构：按考试维度存到 localStorage，刷新页面不丢代码 */
 interface DraftPayload {
-    version: 1;
+    version: 2;
     contents: Record<string, string>;
-    openPaths: string[];
-    currentPath: string;
-    modified: Record<string, boolean>;
-    /** 各文件显式选择过的语言（'' / 缺省 = 按扩展名自动推断） */
     languages: Record<string, string>;
 }
 
-/** 读取并校验本地草稿，损坏时当作没有 */
+/** 读取并校验本地草稿，损坏或旧版本时当作没有 */
 function loadDraft(key: string): DraftPayload | null {
     try {
         const raw = localStorage.getItem(key);
@@ -49,7 +66,7 @@ function loadDraft(key: string): DraftPayload | null {
             return null;
         }
         const data = JSON.parse(raw);
-        if (data && data.version === 1 && typeof data.contents === "object") {
+        if (data && data.version === 2 && typeof data.contents === "object") {
             return data as DraftPayload;
         }
     } catch (e) {
@@ -58,7 +75,7 @@ function loadDraft(key: string): DraftPayload | null {
     return null;
 }
 
-/** Agent 输入框：原型只是一行占位文案，这里换成可输入的 textarea */
+/** Agent 输入框：一行可输入的 textarea */
 const AgentInputStyle: React.CSSProperties = {
     display: "block",
     width: "100%",
@@ -75,17 +92,21 @@ const AgentInputStyle: React.CSSProperties = {
     lineHeight: 1.5,
 };
 
-/** 文件树目录图标：Icon 组件只画描边，原型这里需要浅黄填充 */
-function FolderIcon() {
-    return (
-        <svg className="folder-ico" width={14} height={14} viewBox="0 0 24 24"
-             fill="#fef3c7" stroke="currentColor" strokeWidth={1.6} strokeLinejoin="round">
-            <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
-        </svg>
-    );
-}
+/** 样例测试的输入 / 期望输出展示块 */
+const SampleBoxStyle: React.CSSProperties = {
+    margin: 0,
+    padding: "8px 10px",
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    borderRadius: 6,
+    fontFamily: "\"SFMono-Regular\", Consolas, Menlo, monospace",
+    fontSize: 11,
+    lineHeight: 1.6,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-all",
+};
 
-/** 把 `反引号` 包住的片段渲染成行内 <code>，与原型里的代码标记一致 */
+/** 把 `反引号` 包住的片段渲染成行内 <code> */
 function renderInlineCode(text: string): React.ReactNode {
     return text.split("`").map((part, index) =>
         index % 2 === 1
@@ -94,64 +115,112 @@ function renderInlineCode(text: string): React.ReactNode {
     );
 }
 
+interface AgentMessage {
+    id: string;
+    role: "user" | "agent";
+    text?: string;
+    time?: string;
+    paragraphs?: string[];
+}
+
 /**
- * 04 做题工作台：满屏工作区（文件树 / 题目 / 编辑器 / 终端 / Coding Agent）。
+ * 04 做题工作台：满屏工作区（题目 / 编辑器 / 终端 / Coding Agent）。
  *
- * 做题页在原型里是独立满屏页面，因此不使用 StudentLayout，直接以 .wb-root 作根节点，
- * 内部类名全部沿用原型（workbench.css 的选择器都限定在 .wb-root 之下）。
+ * 数据来自 /api/v1/my/exams/:id：题面、样例与初始代码由后端下发
+ * （隐藏测试不会下发）；提交当前只收卷存档，判定结果随判题服务接入。
+ * Agent 对话与终端为本地演示。
  */
 export function WorkbenchPage() {
     const { examId } = useParams<{ examId: string }>();
     const history = useHistory();
-    const exam = findExam(examId);
+    const user = useSelector((s: Store) => s.user);
+
+    const [detail, setDetail] = useState<StudentExamDetail | null>(null);
+    const [submissions, setSubmissions] = useState<MySubmission[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    const load = () => {
+        setLoading(true);
+        setError(null);
+        Promise.all([fetchMyExam(Number(examId)), fetchMyExamSubmissions(Number(examId))])
+            .then(([exam, result]) => {
+                setDetail(exam);
+                setSubmissions(result.submissions);
+                setLoading(false);
+            })
+            .catch((e: ApiError) => {
+                setError(e.message);
+                setLoading(false);
+            });
+    };
+
+    useEffect(load, [examId]);
 
     // 倒计时按秒真实递减
-    const [seconds, setSeconds] = useState(RemainingSeconds);
+    const [seconds, setSeconds] = useState(0);
     useEffect(() => {
-        const timer = window.setInterval(() => {
-            setSeconds(current => (current <= 1 ? 0 : current - 1));
-        }, 1000);
+        if (!detail) {
+            return;
+        }
+        setSeconds(secondsUntil(detail.endTime));
+        const timer = window.setInterval(() => setSeconds(secondsUntil(detail.endTime)), 1000);
         return () => window.clearInterval(timer);
-    }, []);
+    }, [detail]);
 
-    // 工作区：打开的文件标签、当前文件、各文件内容与「未保存」标记。
+    const problems = detail?.problems || [];
+    const [currentProblemId, setCurrentProblemId] = useState<number | null>(null);
+    const problem = useMemo(
+        () => problems.find(item => item.problemId === currentProblemId) || problems[0] || null,
+        [problems, currentProblemId]
+    );
+
+    // 工作区：按题目（文件路径）组织的代码内容与「未保存」标记。
     // 代码是学生的实际作答内容，按考试存为本地草稿，刷新 / 断网不丢失
     const draftKey = `workbench-draft-${examId}`;
     const [savedDraft] = useState(() => loadDraft(draftKey));
-    const [openPaths, setOpenPaths] = useState<string[]>(() =>
-        savedDraft && savedDraft.openPaths.length ? savedDraft.openPaths : DefaultOpenPaths.slice());
-    const [currentPath, setCurrentPath] = useState<string>(() =>
-        savedDraft && savedDraft.currentPath ? savedDraft.currentPath : DefaultOpenPaths[0]);
-    const [contents, setContents] = useState<Record<string, string>>(() => ({
-        ...WorkspaceFiles,
-        ...(savedDraft ? savedDraft.contents : {}),
-    }));
-    const [modified, setModified] = useState<Record<string, boolean>>(() => ({
-        ...DefaultModifiedPaths,
-        ...(savedDraft ? savedDraft.modified : {}),
-    }));
-    /** 各文件显式选择过的语言；未选过的按扩展名推断 */
+    const [contents, setContents] = useState<Record<string, string>>({});
+    const [modified, setModified] = useState<Record<string, boolean>>({});
+    /** 各文件显式选择过的语言（'' / 缺省 = 按扩展名自动推断） */
     const [languages, setLanguages] = useState<Record<string, string>>(() => ({
         ...(savedDraft ? savedDraft.languages : {}),
     }));
     const [edited, setEdited] = useState(false);
-    /** 最近一次自动保存的时刻，展示在顶栏 */
-    const [savedClock, setSavedClock] = useState(savedDraft ? formatClock(new Date()) : "14:32:05");
+    const [savedClock, setSavedClock] = useState<string | null>(null);
 
-    const currentLanguage = languages[currentPath] || languageForPath(currentPath);
+    // 题目加载后初始化每道题的代码内容（本地草稿优先，其次初始代码）
+    useEffect(() => {
+        if (!detail) {
+            return;
+        }
+        setContents(current => {
+            const next = { ...current };
+            detail.problems.forEach(item => {
+                const path = problemPath(item);
+                if (next[path] == null) {
+                    next[path] = (savedDraft && savedDraft.contents[path]) || item.starterCode || "";
+                }
+            });
+            return next;
+        });
+        if (currentProblemId == null && detail.problems.length > 0) {
+            setCurrentProblemId(detail.problems[0].problemId);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detail]);
+
+    const currentPath = problem ? problemPath(problem) : "";
+    const currentLanguage = (currentPath && languages[currentPath]) ||
+        (problem ? (LanguageExtensions[problem.language] ? problem.language : languageForPath(currentPath)) : "plaintext");
 
     // 自动保存：工作区状态变化后延迟 800ms 写入本地草稿（debounce 掉连续击键）
     useEffect(() => {
+        if (!detail) {
+            return;
+        }
         const timer = window.setTimeout(() => {
             try {
-                const payload: DraftPayload = {
-                    version: 1,
-                    contents,
-                    openPaths,
-                    currentPath,
-                    modified,
-                    languages,
-                };
+                const payload: DraftPayload = { version: 2, contents, languages };
                 localStorage.setItem(draftKey, JSON.stringify(payload));
             } catch (e) {
                 // 存储失败（隐私模式 / 空间不足）不影响继续作答
@@ -160,16 +229,29 @@ export function WorkbenchPage() {
             setSavedClock(formatClock(new Date()));
         }, 800);
         return () => window.clearTimeout(timer);
-    }, [draftKey, contents, openPaths, currentPath, modified, languages]);
+    }, [draftKey, detail, contents, languages]);
 
     const [problemTab, setProblemTab] = useState<ProblemTabKey>("statement");
-    const [messages, setMessages] = useState(AgentMessages);
+    const [submitting, setSubmitting] = useState(false);
+
+    // Agent 对话：本地演示（服务随后续迭代接入）
+    const [messages, setMessages] = useState<AgentMessage[]>([
+        {
+            id: "agent-intro",
+            role: "agent",
+            time: formatClock(new Date()),
+            paragraphs: [
+                "你好，我是本场考试的 Coding Agent（演示）。",
+                "Agent 服务将在下一迭代接入；当前的回复为本地演示，不会修改你的代码。",
+            ],
+        },
+    ]);
     const [draft, setDraft] = useState("");
     const messageSeed = useRef(0);
 
     const chatRef = useRef<HTMLDivElement>(null);
 
-    // 追加消息后滚动到会话底部（.chat 是 overflow: hidden，可编程滚动）
+    // 追加消息后滚动到会话底部
     useEffect(() => {
         const chat = chatRef.current;
         if (chat) {
@@ -177,25 +259,15 @@ export function WorkbenchPage() {
         }
     }, [messages.length]);
 
-    const currentCode = contents[currentPath] || "";
-
-    /** 点击文件树或编辑器标签切换当前文件 */
-    const openFile = (path: string) => {
-        setOpenPaths(current => (current.indexOf(path) >= 0 ? current : [...current, path]));
-        setCurrentPath(path);
-    };
-
-    /** 关闭编辑器标签；至少保留一个文件，避免编辑区空白 */
-    const closeTab = (path: string) => {
-        if (openPaths.length <= 1) {
-            return;
-        }
-        const remaining = openPaths.filter(item => item !== path);
-        setOpenPaths(remaining);
-        if (currentPath === path) {
-            setCurrentPath(remaining[remaining.length - 1]);
-        }
-    };
+    /** 当前题目的提交次数 */
+    const mySubmissions = useMemo(
+        () => (problem ? submissions.filter(item => item.problemId === problem.problemId) : []),
+        [submissions, problem]
+    );
+    const used = mySubmissions.length;
+    const remaining = detail ? Math.max(0, detail.submitLimit - used) : 0;
+    const finished = !!detail && (detail.status === "finished" || seconds <= 0);
+    const currentCode = (currentPath && contents[currentPath]) || "";
 
     /** 编辑代码：写入内容、打上未保存标记 */
     const handleCodeChange = (path: string, value: string) => {
@@ -218,7 +290,6 @@ export function WorkbenchPage() {
             {
                 id: "local-agent-" + seed,
                 role: "agent",
-                variant: "plain",
                 time,
                 paragraphs: [CannedReplies[seed % CannedReplies.length]],
             },
@@ -226,13 +297,109 @@ export function WorkbenchPage() {
         setDraft("");
     };
 
-    /** 提交判分：二次确认后进入结果页 */
+    /** 提交答卷：只收卷存档（status=pending），判定随判题服务接入 */
     const handleSubmit = () => {
-        const confirmed = window.confirm("确认提交判分？提交后立即判分，本次考试还剩 2 次机会。");
-        if (confirmed) {
-            history.push(Routes.examResult(examId));
+        if (!detail || !problem) {
+            return;
         }
+        if (remaining <= 0) {
+            toast(`本题提交次数已用完（上限 ${detail.submitLimit} 次）`, "warning");
+            return;
+        }
+        const confirmed = window.confirm(
+            `确认提交「任务 ${problem.order + 1}：${problem.title}」？\n` +
+            `评测服务接入前仅收卷存档；提交后本题剩余 ${remaining - 1} 次机会。`
+        );
+        if (!confirmed) {
+            return;
+        }
+        setSubmitting(true);
+        submitCode(detail.id, problem.problemId, currentCode, problem.language)
+            .then(result => {
+                setSubmitting(false);
+                setSubmissions(current => [
+                    {
+                        id: result.submission.id,
+                        examId: detail.id,
+                        problemId: problem.problemId,
+                        problemTitle: problem.title,
+                        language: problem.language,
+                        status: result.submission.status,
+                        created: result.submission.created,
+                        code: currentCode,
+                    },
+                    ...current,
+                ]);
+                setProblemTab("submissions");
+                toast(`已提交（待判定），本题剩余 ${result.remaining} 次`, "success");
+            })
+            .catch((e: ApiError) => {
+                setSubmitting(false);
+                toast(e.message, "warning");
+            });
     };
+
+    if (loading || (!detail && !error)) {
+        return (
+            <div className="wb-root">
+                <div className="canvas">
+                    <header className="topbar">
+                        <div className="topbar-left">
+                            <div className="brand">
+                                <div className="logo">
+                                    <Icon name="code" size={17} stroke="#ffffff" strokeWidth={2.2}/>
+                                </div>
+                                <div className="brand-name">AI Coding 考试平台</div>
+                            </div>
+                            <div className="divider-v"/>
+                            <div className="exam-name">加载中…</div>
+                        </div>
+                        <div className="topbar-right">
+                            <div className="avatar">{(user?.nickname || "生").slice(0, 1)}</div>
+                        </div>
+                    </header>
+                    <div className="main" style={{ alignItems: "center", justifyContent: "center" }}>
+                        <div className="muted" style={{ fontSize: 12 }}>正在加载考试与题目…</div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (error || !detail) {
+        return (
+            <div className="wb-root">
+                <div className="canvas">
+                    <header className="topbar">
+                        <div className="topbar-left">
+                            <div className="brand">
+                                <div className="logo">
+                                    <Icon name="code" size={17} stroke="#ffffff" strokeWidth={2.2}/>
+                                </div>
+                                <div className="brand-name">AI Coding 考试平台</div>
+                            </div>
+                            <div className="divider-v"/>
+                            <div className="exam-name">无法进入考场</div>
+                        </div>
+                        <div className="topbar-right">
+                            <div className="avatar">{(user?.nickname || "生").slice(0, 1)}</div>
+                        </div>
+                    </header>
+                    <div className="main" style={{ alignItems: "center", justifyContent: "center" }}>
+                        <div style={{ textAlign: "center" }}>
+                            <div style={{ color: "#b91c1c", fontSize: 12.5, marginBottom: 10 }}>
+                                <Icon name="alert-triangle" size={14}/> {error || "考试不存在"}
+                            </div>
+                            <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 12 }}>
+                                可能原因：不在考生名单 / 考试未发布 / 后端未启动
+                            </div>
+                            <Link className="btn btn-secondary" to={Routes.examList}>返回我的考试</Link>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="wb-root">
@@ -247,41 +414,50 @@ export function WorkbenchPage() {
                             <div className="brand-name">AI Coding 考试平台</div>
                         </div>
                         <div className="divider-v"/>
-                        <div className="exam-name">{exam.title}</div>
+                        <div className="exam-name">{detail.title}</div>
                     </div>
                     <div className="topbar-right">
                         <div className="chip chip-ai">
                             <Icon name="shield-check" size={13} strokeWidth={1.9}/>
-                            AI 受限模式
+                            AI {AiModeLabels[detail.aiMode] || detail.aiMode}模式
                         </div>
                         <div className="chip chip-timer">
                             <Icon name="clock" size={14}/>
-                            剩余 {formatCountdown(seconds)}
+                            {finished ? "考试已结束" : `剩余 ${formatCountdown(seconds)}`}
                         </div>
                         <div className="save-status">
                             <span className="dot" style={edited ? { background: "#f59e0b" } : undefined}/>
-                            {edited ? "有未保存修改" : `已自动保存 ${savedClock}`}
+                            {edited ? "有未保存修改" : (savedClock ? `已自动保存 ${savedClock}` : "自动保存已开启")}
                         </div>
-                        <button className="btn-submit" type="button" onClick={handleSubmit}>
+                        <button className="btn-submit" type="button"
+                                onClick={handleSubmit}
+                                disabled={submitting || finished || remaining <= 0}
+                                title={finished ? "考试已结束" : remaining <= 0 ? "本题提交次数已用完" : undefined}>
                             <Icon name="arrow-up" size={14} strokeWidth={1.9}/>
-                            提交判分
-                            <span className="sub">剩余 2 次</span>
+                            提交答卷
+                            <span className="sub">剩余 {remaining} 次</span>
                         </button>
-                        <div className="avatar">李</div>
+                        <div className="avatar">{(user?.nickname || "生").slice(0, 1)}</div>
                     </div>
                 </header>
 
                 {/* 考试信息条 */}
                 <div className="metabar">
                     <div className="metabar-left">
-                        <span className="task-name">任务 1 / 3 · 订单排序修复</span>
-                        <span className="meta-chip blue">工程题</span>
-                        <span className="meta-chip">Python 3.11</span>
-                        <span className="meta-chip green"><span className="status-dot"/>容器运行中</span>
-                        <span className="meta-chip">网络已隔离</span>
+                        {problem && (
+                            <>
+                                <span className="task-name">
+                                    任务 {problem.order + 1} / {problems.length} · {problem.title}
+                                </span>
+                                <span className="meta-chip blue">{TypeLabels[problem.type] || problem.type}</span>
+                                <span className="meta-chip">{problem.language}</span>
+                            </>
+                        )}
+                        <span className="meta-chip">{detail.submitLimit} 次提交 / 题</span>
+                        <span className="meta-chip green"><span className="status-dot"/>提交后待判定</span>
                     </div>
                     <div className="metabar-right">
-                        <span>自动保存已开启</span>
+                        <span>本地草稿自动保存</span>
                         <span className="divider-dot">·</span>
                         <span className="link" onClick={() => history.push(Routes.examPrecheck(examId))}>
                             查看考试须知
@@ -290,50 +466,56 @@ export function WorkbenchPage() {
                 </div>
 
                 <div className="main">
-                    {/* 左侧：工作区文件树 + 时间线 */}
+                    {/* 左侧：题目文件树 + 提交时间线 */}
                     <aside className="sidebar-left">
                         <div className="panel-head">
                             <div className="panel-title">工作区</div>
-                            <div className="icon-btn">
+                            <div className="icon-btn" title="运行环境随判题容器接入（演示）">
                                 <Icon name="refresh" size={14}/>
                             </div>
                         </div>
-                        <div className="section-label">EXAM-PROJECT</div>
+                        <div className="section-label">{detail.course || "EXAM"}</div>
                         <div className="tree">
-                            {WorkspaceEntries.map(entry => {
-                                const isActive = entry.kind === "file" && entry.path === currentPath;
-                                const rowClass = "tree-row " + (entry.depth === 1 ? "root" : "lv" + entry.depth) +
-                                    (isActive ? " active" : "");
+                            {problems.map(item => {
+                                const path = problemPath(item);
+                                const isActive = !!problem && item.problemId === problem.problemId;
                                 return (
-                                    <div key={entry.path}
-                                         className={rowClass}
-                                         onClick={entry.kind === "file" ? () => openFile(entry.path) : undefined}>
-                                        {entry.kind === "folder" && (
-                                            <Icon name="chevron-down" size={13} stroke="#64748b" strokeWidth={2}/>
-                                        )}
-                                        {entry.kind === "folder"
-                                            ? <FolderIcon/>
-                                            : <Icon name="file" size={13} strokeWidth={1.7} className="file-ico"/>}
-                                        <span>{entry.name}</span>
-                                        {entry.kind === "file" && modified[entry.path] && <span className="modified-dot"/>}
+                                    <div key={item.problemId}
+                                         className={"tree-row lv1" + (isActive ? " active" : "")}
+                                         onClick={() => setCurrentProblemId(item.problemId)}>
+                                        <Icon name="file" size={13} strokeWidth={1.7} className="file-ico"/>
+                                        <span>{path}</span>
+                                        {modified[path] && <span className="modified-dot"/>}
                                     </div>
                                 );
                             })}
+                            {problems.length === 0 && (
+                                <div className="tree-row lv1 muted">本场考试没有题目</div>
+                            )}
                         </div>
 
                         <div className="left-bottom">
                             <div className="timeline-head">
-                                <div className="timeline-title">时间线</div>
-                                <div className="timeline-link" onClick={() => history.push(Routes.examReport(examId))}>
+                                <div className="timeline-title">提交时间线</div>
+                                <div className="timeline-link"
+                                     onClick={() => history.push(Routes.examReport(examId))}>
                                     查看全部
                                 </div>
                             </div>
-                            {TimelineItems.map(item => (
-                                <div className="timeline-item" key={item.text}>
-                                    <span className={"tl-dot" + (item.tone ? " " + item.tone : "")}/>
+                            {submissions.length === 0 && (
+                                <div className="timeline-item">
+                                    <span className="tl-dot"/>
                                     <div>
-                                        <div className="tl-text">{item.text}</div>
-                                        <div className="tl-time">{item.time}</div>
+                                        <div className="tl-text">暂无提交记录</div>
+                                    </div>
+                                </div>
+                            )}
+                            {submissions.slice(0, 6).map(item => (
+                                <div className="timeline-item" key={item.id}>
+                                    <span className="tl-dot green"/>
+                                    <div>
+                                        <div className="tl-text">提交 #{item.id} · {item.problemTitle}</div>
+                                        <div className="tl-time">{timeOf(item.created)} · 待判定</div>
                                     </div>
                                 </div>
                             ))}
@@ -349,53 +531,87 @@ export function WorkbenchPage() {
                                          className={"tab" + (problemTab === tab.key ? " active" : "")}
                                          onClick={() => setProblemTab(tab.key)}>
                                         {tab.label}
-                                        {tab.count != null && <span className="tab-count">{tab.count}</span>}
+                                        {tab.key === "samples" && problem && (
+                                            <span className="tab-count">{problem.samples.length}</span>
+                                        )}
+                                        {tab.key === "submissions" && (
+                                            <span className="tab-count">{used}</span>
+                                        )}
                                     </div>
                                 ))}
-                                <div className="tabs-right">当前任务 1 / 3</div>
+                                <div className="tabs-right">
+                                    {problem ? `当前任务 ${problem.order + 1} / ${problems.length}` : ""}
+                                </div>
                             </div>
 
-                            {problemTab === "statement" && (
+                            {problem && problemTab === "statement" && (
                                 <div className="problem-body">
                                     <div className="problem-title-row">
-                                        <div className="problem-title">任务 1：修复订单排序并补充测试</div>
+                                        <div className="problem-title">任务 {problem.order + 1}：{problem.title}</div>
                                         <div className="badges">
-                                            <span className="badge gray">中等</span>
-                                            <span className="badge blue">40 分</span>
-                                            <span className="badge green">必过 8 / 10</span>
+                                            <span className="badge gray">{DifficultyLabels[problem.difficulty] || problem.difficulty}</span>
+                                            <span className="badge blue">{problem.score} 分</span>
                                         </div>
                                     </div>
-                                    <p className="problem-desc">
-                                        订单服务从 CSV 导入订单后按金额排序展示。当前金额相同的订单顺序不稳定，部分时间格式也无法解析。
-                                        请修复 <code>src/buggy_sort.py</code>，并在 <code>tests/test_sort.py</code> 中补充边界用例。
-                                    </p>
-                                    <p className="rule-line">
-                                        <span className="label">验收：</span>金额相同按 <code>created_at</code> 升序；兼容 ISO 与空格两种时间格式；样例测试全部通过；不得修改 <code>tests/conftest.py</code>。
+                                    <p className="problem-desc" style={{ whiteSpace: "pre-wrap" }}>
+                                        {renderInlineCode(problem.description || "（本题没有题面描述）")}
                                     </p>
                                     <div className="ai-note">
                                         <Icon name="sparkles" size={13}/>
-                                        <span><strong>AI 使用策略：受限模式</strong> · 可解释与运行测试，不可直接写入代码。对话、采纳/拒绝与运行记录将计入过程报告。</span>
+                                        <span>
+                                            <strong>AI 使用策略：{AiModeLabels[detail.aiMode] || detail.aiMode}模式</strong>
+                                            {" · 对话留痕将计入过程报告（Agent 服务下一迭代接入）"}
+                                        </span>
                                     </div>
                                 </div>
                             )}
 
-                            {/* 原型只展开「题目说明」，另外两个标签给只读摘要，保证切换有实际反馈 */}
-                            {problemTab === "samples" && (
+                            {problem && problemTab === "samples" && (
                                 <div className="problem-body">
-                                    {SampleTabNotes.map(note => (
-                                        <p className="rule-line" key={note.label}>
-                                            <span className="label">{note.label}</span>{note.text}
-                                        </p>
+                                    {problem.samples.length === 0 && (
+                                        <p className="rule-line"><span className="label">样例：</span>本题没有公开样例</p>
+                                    )}
+                                    {problem.samples.map(sample => (
+                                        <div key={sample.name} style={{ marginBottom: 12 }}>
+                                            <p className="rule-line" style={{ marginBottom: 6 }}>
+                                                <span className="label">{sample.name}</span>
+                                            </p>
+                                            <div className="row" style={{ gap: 10, alignItems: "flex-start" }}>
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <div className="muted" style={{ fontSize: 10.5, marginBottom: 3 }}>输入</div>
+                                                    <pre style={SampleBoxStyle}>{sample.input}</pre>
+                                                </div>
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <div className="muted" style={{ fontSize: 10.5, marginBottom: 3 }}>期望输出</div>
+                                                    <pre style={SampleBoxStyle}>{sample.expected}</pre>
+                                                </div>
+                                            </div>
+                                        </div>
                                     ))}
+                                    <p className="rule-line">
+                                        <span className="label">提示：</span>
+                                        隐藏测试不会下发到浏览器，仅在判题时使用（判题服务接入后生效）。
+                                    </p>
                                 </div>
                             )}
 
-                            {problemTab === "submissions" && (
+                            {problem && problemTab === "submissions" && (
                                 <div className="problem-body">
-                                    {SubmissionTabNotes.map(note => (
-                                        <p className="rule-line" key={note.label}>
-                                            <span className="label">{note.label}</span>{note.text}
-                                        </p>
+                                    <p className="rule-line">
+                                        <span className="label">已用次数：</span>
+                                        {used} / {detail.submitLimit}（每次提交覆盖保存，判定随判题服务接入）
+                                    </p>
+                                    {mySubmissions.length === 0 && (
+                                        <p className="rule-line"><span className="label">暂无提交</span></p>
+                                    )}
+                                    {mySubmissions.map(item => (
+                                        <details key={item.id} style={{ marginBottom: 8 }}>
+                                            <summary style={{ cursor: "pointer", fontSize: 11.5 }}>
+                                                #{item.id} · {new Date(item.created).toLocaleString()} ·{" "}
+                                                <span className="badge gray">待判定</span>
+                                            </summary>
+                                            <pre style={{ ...SampleBoxStyle, marginTop: 6 }}>{item.code}</pre>
+                                        </details>
                                     ))}
                                 </div>
                             )}
@@ -403,27 +619,15 @@ export function WorkbenchPage() {
 
                         <div className="editor">
                             <div className="editor-tabs">
-                                {openPaths.map(path => {
-                                    const active = path === currentPath;
-                                    return (
-                                        <div key={path}
-                                             className={"editor-tab" + (active ? " active" : "")}
-                                             onClick={() => setCurrentPath(path)}>
-                                            <Icon name="file" size={12} stroke={active ? "#2563eb" : "#94a3b8"}/>
-                                            {workspaceFileName(path)}
-                                            {modified[path] && <span className="modified-dot"/>}
-                                            <span className="close"
-                                                  onClick={event => {
-                                                      event.stopPropagation();
-                                                      closeTab(path);
-                                                  }}>×</span>
-                                        </div>
-                                    );
-                                })}
+                                <div className={"editor-tab active"}>
+                                    <Icon name="file" size={12} stroke="#2563eb"/>
+                                    {currentPath || "—"}
+                                    {modified[currentPath] && <span className="modified-dot"/>}
+                                </div>
                                 <div className="editor-actions">
                                     <select className="lang-select"
                                             title="当前文件的语法高亮语言"
-                                            value={languages[currentPath] || ""}
+                                            value={(currentPath && languages[currentPath]) || ""}
                                             onChange={event => setLanguages(current => ({
                                                 ...current,
                                                 [currentPath]: event.target.value,
@@ -432,14 +636,18 @@ export function WorkbenchPage() {
                                             <option key={option.id} value={option.id}>{option.label}</option>
                                         ))}
                                     </select>
-                                    <span className="ok">● 自动保存已开启</span>
+                                    <span className="ok">● 本地草稿已开启</span>
                                 </div>
                             </div>
                             <div className="editor-body">
-                                <CodeEditor path={currentPath}
-                                            initialValue={currentCode}
-                                            language={currentLanguage}
-                                            onChange={handleCodeChange}/>
+                                {currentPath ? (
+                                    <CodeEditor path={currentPath}
+                                                initialValue={currentCode}
+                                                language={currentLanguage}
+                                                onChange={handleCodeChange}/>
+                                ) : (
+                                    <div className="muted" style={{ padding: 12, fontSize: 12 }}>没有可编辑的文件</div>
+                                )}
                             </div>
                         </div>
 
@@ -449,7 +657,7 @@ export function WorkbenchPage() {
                                     <Icon name="terminal" size={13} stroke="#475569"/>
                                     终端
                                 </div>
-                                <div className="terminal-tab active">测试</div>
+                                <div className="terminal-tab active" title="演示数据，运行环境随判题容器接入">测试</div>
                                 <div className="terminal-tab">输出</div>
                                 <div className="terminal-tab">问题</div>
                                 <div className="terminal-tab terminal-clear">清屏</div>
@@ -469,7 +677,7 @@ export function WorkbenchPage() {
                         </div>
                     </section>
 
-                    {/* 右侧：Coding Agent */}
+                    {/* 右侧：Coding Agent（演示） */}
                     <aside className="agent">
                         <div className="agent-head">
                             <div className="agent-brand">
@@ -478,13 +686,13 @@ export function WorkbenchPage() {
                                 </div>
                                 <div>
                                     <div className="agent-name">Coding Agent</div>
-                                    <div className="agent-sub">对话与操作全程留痕</div>
+                                    <div className="agent-sub">演示 · 服务下一迭代接入</div>
                                 </div>
                             </div>
                             <div className="agent-head-actions">
                                 <span className="mode-chip">
                                     <Icon name="lock" size={10} strokeWidth={2}/>
-                                    受限
+                                    {AiModeLabels[detail.aiMode] || detail.aiMode}
                                 </span>
                                 <div className="icon-btn">
                                     <Icon name="history" size={14}/>
@@ -499,7 +707,7 @@ export function WorkbenchPage() {
                             <span className="ctx-label">上下文</span>
                             <span className="ctx-chip">
                                 <Icon name="file" size={10}/>
-                                {currentPath}
+                                {currentPath || "—"}
                             </span>
                             <span className="ctx-add">+ 添加</span>
                         </div>
@@ -516,37 +724,9 @@ export function WorkbenchPage() {
                                         <span className="time">{message.time}</span>
                                     </div>
                                     <div className="agent-card">
-                                        {message.paragraphs.map((paragraph, index) => (
+                                        {(message.paragraphs || []).map((paragraph, index) => (
                                             <p key={index}>{renderInlineCode(paragraph)}</p>
                                         ))}
-                                        {message.variant === "diff" && (
-                                            <div className="diff-box">
-                                                <span className="diff-del">- key=lambda o: o.amount</span>
-                                                <span className="diff-add">+ key=lambda o: (o.amount, parse_time(o.created_at))</span>
-                                            </div>
-                                        )}
-                                        {message.variant === "code" && (
-                                            <div className="code-box">{message.code}</div>
-                                        )}
-                                        {message.variant === "diff" && (
-                                            <div className="card-actions">
-                                                <span className="btn-mini primary">
-                                                    <Icon name="copy" size={10} strokeWidth={1.9}/>
-                                                    复制建议
-                                                </span>
-                                                <span className="btn-mini">查看相关文件</span>
-                                                <span className="btn-mini disabled">
-                                                    <Icon name="lock" size={10} strokeWidth={2}/>
-                                                    应用到编辑器
-                                                </span>
-                                            </div>
-                                        )}
-                                        {message.variant === "diff" && (
-                                            <div className="card-foot">
-                                                <Icon name="shield" size={10} strokeWidth={2}/>
-                                                受限模式：仅提供解释与建议，不会直接写入代码
-                                            </div>
-                                        )}
                                     </div>
                                 </div>
                             ))}
@@ -578,7 +758,7 @@ export function WorkbenchPage() {
                             </div>
                             <div className="agent-foot">
                                 <Icon name="lock" size={10} strokeWidth={2}/>
-                                受限模式 · 对话将随试卷冻结，并计入过程评分
+                                对话将随试卷冻结，并计入过程评分
                             </div>
                         </div>
                     </aside>
@@ -587,14 +767,12 @@ export function WorkbenchPage() {
                 {/* 底部状态栏 */}
                 <footer className="statusbar">
                     <div className="status-left">
-                        <span className="status-item"><span className="status-dot"/>容器正常</span>
-                        <span className="status-item">CPU 12%</span>
-                        <span className="status-item">内存 1.2 / 4 GB</span>
+                        <span className="status-item"><span className="status-dot"/>本地作答模式</span>
+                        <span className="status-item">提交后待判定</span>
                     </div>
                     <div className="status-right">
-                        <span className="status-item">快照 #18 · 14:32:05</span>
-                        <span className="status-item">网络隔离已开启</span>
-                        <span className="status-item">自动保存 30s</span>
+                        <span className="status-item">{savedClock ? `草稿 ${savedClock}` : "自动保存已开启"}</span>
+                        <span className="status-item">判题容器随下一迭代接入</span>
                     </div>
                 </footer>
             </div>
