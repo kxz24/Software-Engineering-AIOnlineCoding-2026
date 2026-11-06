@@ -1,6 +1,6 @@
 {
-  "short_name": "清软论坛",
-  "name": "清软论坛",
+  "short_name": "AI Coding",
+  "name": "AI Coding 在线编程考试平台",
   "icons": [
     {
       "src": "icon32.png",
@@ -10,6 +10,6 @@
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "theme_color": "#2563eb",
+  "background_color": "#eef2f7"
 }
