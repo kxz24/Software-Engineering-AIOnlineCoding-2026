@@ -61,8 +61,12 @@ class Problem(models.Model):
     )
     # 工程题为初始代码 / 仓库说明，算法题为函数骨架
     starter_code = models.TextField(blank=True, default="", verbose_name="初始代码")
-    # 依赖镜像名，容器化判题时使用，如 python:3.11-slim
+    # 依赖镜像名（预留字段；当前判题统一使用 settings.JUDGE_IMAGE）
     image = models.CharField(max_length=128, blank=True, default="", verbose_name="依赖镜像")
+    # 判题资源限制（每个测试用例）
+    time_limit_ms = models.PositiveIntegerField(default=2000, verbose_name="单用例时限（毫秒）")
+    memory_limit_mb = models.PositiveIntegerField(default=256, verbose_name="内存上限（MB）")
+    output_limit_kb = models.PositiveIntegerField(default=1024, verbose_name="输出上限（KB）")
     created_by = models.ForeignKey(
         User,
         null=True,

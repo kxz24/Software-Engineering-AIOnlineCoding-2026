@@ -202,7 +202,7 @@ export function PrecheckPage() {
                                 <div className="card-title">环境自检</div>
                                 <div className="card-sub">
                                     浏览器端真实检测{lastCheck ? ` · 最近检测 ${lastCheck}` : ""}
-                                    {" · 判题容器与 Agent 运行环境随评测服务接入"}
+                                    {" · 判题在后台独立容器中执行 · Agent 运行环境随下一迭代接入"}
                                 </div>
                             </div>
                             {checking

@@ -319,6 +319,9 @@ export interface ProblemSummary {
     language: string;
     difficulty: "easy" | "medium" | "hard";
     image: string;
+    timeLimitMs: number;
+    memoryLimitMb: number;
+    outputLimitKb: number;
     sampleCount: number;
     hiddenCount: number;
     updated: string;
@@ -367,6 +370,9 @@ export function createProblem(payload: {
     difficulty: string;
     image: string;
     starterCode: string;
+    timeLimitMs?: number;
+    memoryLimitMb?: number;
+    outputLimitKb?: number;
     samples: SamplePayload[];
 }): Promise<ProblemDetail> {
     return request(Urls.problems, { method: "POST", body: payload });
@@ -383,6 +389,9 @@ export function updateProblem(
         difficulty?: string;
         image?: string;
         starterCode?: string;
+        timeLimitMs?: number;
+        memoryLimitMb?: number;
+        outputLimitKb?: number;
         samples?: SamplePayload[];
     }
 ): Promise<ProblemDetail> {
@@ -501,7 +510,18 @@ export function examAction(
 }
 
 /** 管理端提交记录条目 */
-export interface ExamSubmissionEntry {
+/** 判题结果字段（提交列表与详情共用） */
+export interface SubmissionResultFields {
+    verdict?: string;
+    score?: number;
+    passedCount?: number;
+    totalCount?: number;
+    needsReview?: boolean;
+    timeMs?: number;
+    memoryKb?: number;
+}
+
+export interface ExamSubmissionEntry extends SubmissionResultFields {
     id: number;
     examId: number;
     problemId: number;
@@ -530,6 +550,8 @@ export function fetchExamSubmissions(
 /** 学生侧考试列表条目（在管理端字段之上多一个我的提交数） */
 export interface MyExamSummary extends ExamSummary {
     mySubmissions: number;
+    myBestScore: number;
+    maxScore: number;
 }
 
 /** 学生可见的样例测试 */
@@ -544,6 +566,7 @@ export interface StudentProblem {
     problemId: number;
     order: number;
     score: number;
+    bestScore: number;
     title: string;
     type: string;
     language: string;
@@ -570,7 +593,7 @@ export interface StudentExamDetail {
 }
 
 /** 学生侧提交记录（含代码正文） */
-export interface MySubmission {
+export interface MySubmission extends SubmissionResultFields {
     id: number;
     examId: number;
     problemId: number;
@@ -579,6 +602,38 @@ export interface MySubmission {
     status: string;
     created: string;
     code: string;
+}
+
+/** 单个测试用例的判定结果 */
+export interface SubmissionCase {
+    name: string;
+    isSample: boolean;
+    verdict: string;
+    timeMs: number;
+    memoryKb: number;
+    outputExcerpt?: string;
+    errorExcerpt?: string;
+}
+
+/** 单条提交详情（含用例结果） */
+export interface SubmissionDetail extends MySubmission {
+    username: string;
+    nickname: string;
+    verdict: string;
+    score: number;
+    passedCount: number;
+    totalCount: number;
+    needsReview: boolean;
+    timeMs: number;
+    memoryKb: number;
+    samplePassed: number;
+    sampleTotal: number;
+    hiddenPassed: number;
+    hiddenTotal: number;
+    compileOutput: string;
+    judgeError: string;
+    judgedAt: string | null;
+    cases: SubmissionCase[];
 }
 
 /** 我的考试列表 */
@@ -604,7 +659,7 @@ export function fetchMyProblemSubmissions(
     return request(Urls.mySubmission(examId, problemId));
 }
 
-/** 提交代码（当前只收卷存档，判题服务接入后返回判定结果） */
+/** 提交代码（立即返回 pending，判题结果通过 fetchSubmission 轮询） */
 export function submitCode(
     examId: number,
     problemId: number,
@@ -615,6 +670,11 @@ export function submitCode(
         method: "POST",
         body: { code, language },
     });
+}
+
+/** 单条提交详情（判题结果轮询） */
+export function fetchSubmission(submissionId: number): Promise<SubmissionDetail> {
+    return request(Urls.submissionDetail(submissionId));
 }
 
 /** 当前令牌 */

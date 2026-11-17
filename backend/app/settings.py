@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -50,6 +51,7 @@ INSTALLED_APPS = [
     "user",
     "problem",
     "exam",
+    "judge",
     "rest_framework",
     "drf_spectacular",
     'drf_spectacular_sidecar',
@@ -167,3 +169,20 @@ SALT = "bar"
 
 # Login URL for admin panel
 LOGIN_URL = '/admin/login/'
+
+# ---------------------------------------------------------------------------
+# 判题服务（Celery + Redis + Docker）
+# ---------------------------------------------------------------------------
+# 提交接口只负责入队，判题在独立的 Celery worker 中执行。
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
+CELERY_TASK_TIME_LIMIT = 120          # 单次判分硬上限（秒）
+CELERY_TASK_SOFT_TIME_LIMIT = 110     # 软上限，给清理容器留时间
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# 判题沙箱镜像（由 backend/judge/Dockerfile 构建）
+JUDGE_IMAGE = os.environ.get("JUDGE_IMAGE", "aicoding-judge:latest")
+# 测试环境可关掉入队，避免依赖 Redis
+JUDGE_ENQUEUE_ENABLED = os.environ.get("JUDGE_ENQUEUE_ENABLED", "1") == "1"
+# 单次判题的整体墙钟上限（秒），需小于 CELERY_TASK_TIME_LIMIT
+JUDGE_WALL_TIME_LIMIT = int(os.environ.get("JUDGE_WALL_TIME_LIMIT", "110"))

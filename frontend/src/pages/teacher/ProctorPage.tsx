@@ -14,6 +14,7 @@ import {
     fetchExamSubmissions,
     fetchExams,
 } from "../../api/client";
+import { submissionLabel } from "../../api/judge";
 
 /** 每 15 秒自动拉取一次提交动态 */
 const RefreshIntervalMs = 15000;
@@ -69,7 +70,7 @@ function exportCsv(exam: ExamDetail, submissions: ExamSubmissionEntry[]) {
         item.username,
         item.problemTitle,
         item.language,
-        "待判定",
+        `${submissionLabel(item).label}${item.status === "judged" ? ` ${item.score ?? 0} 分` : ""}`,
     ]);
     const csv = [header, ...lines]
         .map(row => row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(","))
@@ -449,7 +450,9 @@ function ProctorDashboard({ examId }: { examId: number }) {
                                                     {item.nickname}（{item.username}）提交了「{item.problemTitle}」
                                                 </div>
                                                 <div className="log-sub">
-                                                    {formatDateTime(item.created)} · {item.language} · 待判定
+                                                    {formatDateTime(item.created)} · {item.language} ·{" "}
+                                                    {submissionLabel(item).label}
+                                                    {item.status === "judged" ? ` · ${item.score ?? 0} 分` : ""}
                                                 </div>
                                             </div>
                                         </div>

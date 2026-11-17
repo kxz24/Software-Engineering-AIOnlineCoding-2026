@@ -1,5 +1,10 @@
 """考试业务的底层操作：创建 / 组卷 / 名单 / 发布 / 提交。"""
 
+import logging
+
+from django.conf import settings
+from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from problem.models import Problem
@@ -7,6 +12,20 @@ from user.controllers import record_audit
 from user.models import User
 
 from .models import Exam, ExamCandidate, ExamProblem, Submission
+
+logger = logging.getLogger(__name__)
+
+
+def _enqueue_judge(submission_id):
+    """把提交交给 Celery；Redis 不可用时保持 pending，由 judge_requeue 兜底。"""
+    if not getattr(settings, "JUDGE_ENQUEUE_ENABLED", True):
+        return
+    try:
+        from judge.tasks import judge_submission
+
+        judge_submission.delay(submission_id)
+    except Exception:  # noqa: BLE001 - 入队失败不能影响提交本身
+        logger.exception("判题任务入队失败 submission=%s", submission_id)
 
 
 def _to_bool(value):
@@ -227,13 +246,24 @@ def exam_detail(exam):
     return detail
 
 
-def _problem_for_student(item):
+def _best_scores(exam, student):
+    """某学生在每道题上的最高已判分（problem_id -> score）"""
+    rows = (
+        exam.submissions.filter(student=student, status=Submission.STATUS_JUDGED)
+        .values("problem_id")
+        .annotate(best=Max("score"))
+    )
+    return {row["problem_id"]: row["best"] or 0 for row in rows}
+
+
+def _problem_for_student(item, best_score=0):
     """学生视角的题目：题面、初始代码、样例测试；隐藏测试不下发。"""
     problem = item.problem
     return {
         "problemId": problem.id,
         "order": item.order,
         "score": item.score,
+        "bestScore": best_score,
         "title": problem.title,
         "type": problem.type,
         "language": problem.language,
@@ -259,6 +289,11 @@ def student_exams(student):
     for exam in visible:
         summary = exam_summary(exam)
         summary["mySubmissions"] = exam.submissions.filter(student=student).count()
+        best = _best_scores(exam, student)
+        summary["myBestScore"] = sum(
+            best.get(item.problem_id, 0) for item in exam.exam_problems.all()
+        )
+        summary["maxScore"] = sum(item.score for item in exam.exam_problems.all())
         result.append(summary)
     return result
 
@@ -270,6 +305,8 @@ def student_exam_detail(student, exam):
     if not is_candidate(exam, student):
         return "不在本场考试的名单中", False
 
+    best = _best_scores(exam, student)
+    items = list(exam.exam_problems.select_related("problem"))
     detail = {
         "id": exam.id,
         "title": exam.title,
@@ -283,7 +320,7 @@ def student_exam_detail(student, exam):
         "submitLimit": exam.submit_limit,
         "aiMode": exam.ai_mode,
         "problems": [
-            _problem_for_student(item) for item in exam.exam_problems.select_related("problem")
+            _problem_for_student(item, best.get(item.problem_id, 0)) for item in items
         ],
     }
     return detail, True
@@ -298,32 +335,46 @@ def submission_count(exam, problem_id, student):
 
 def create_submission(student, exam, problem_id, code, language):
     """
-    学生提交代码。当前阶段只存档不判分，判题服务接入后由其消费。
+    学生提交代码：校验后落库，并交给 Celery 异步判题。
 
     返回 (submission, True) 或 (reason, http_status, False)。
     """
-    if exam.status != Exam.STATUS_PUBLISHED:
-        return "考试未发布或已归档", 403, False
     now = timezone.now()
-    if exam.start_time and now < exam.start_time:
-        return "考试尚未开始", 400, False
-    if exam.end_time and now > exam.end_time:
-        return "考试已结束，不能再提交", 400, False
-    if not is_candidate(exam, student):
-        return "不在本场考试的名单中", 403, False
+    with transaction.atomic():
+        # 锁住考试行，避免并发提交同时通过「次数上限」检查
+        locked_exam = Exam.objects.select_for_update().get(pk=exam.pk)
+        if locked_exam.status != Exam.STATUS_PUBLISHED:
+            return "考试未发布或已归档", 403, False
+        if locked_exam.start_time and now < locked_exam.start_time:
+            return "考试尚未开始", 400, False
+        if locked_exam.end_time and now > locked_exam.end_time:
+            return "考试已结束，不能再提交", 400, False
+        if not is_candidate(locked_exam, student):
+            return "不在本场考试的名单中", 403, False
 
-    item = exam.exam_problems.filter(problem_id=problem_id).select_related("problem").first()
-    if not item:
-        return "本场考试没有这道题", 404, False
+        item = locked_exam.exam_problems.filter(
+            problem_id=problem_id
+        ).select_related("problem").first()
+        if not item:
+            return "本场考试没有这道题", 404, False
 
-    used = submission_count(exam, problem_id, student)
-    if used >= exam.submit_limit:
-        return f"该题提交次数已用完（每题 {exam.submit_limit} 次）", 400, False
+        used = submission_count(locked_exam, problem_id, student)
+        if used >= locked_exam.submit_limit:
+            return (
+                f"该题提交次数已用完（每题 {locked_exam.submit_limit} 次）",
+                400,
+                False,
+            )
 
-    submission = Submission.objects.create(
-        exam=exam, problem=item.problem, student=student,
-        code=code, language=language or item.problem.language,
-    )
+        submission = Submission.objects.create(
+            exam=locked_exam, problem=item.problem, student=student,
+            code=code, language=language or item.problem.language,
+        )
+        # 事务提交后再入队，避免 worker 读到尚未可见的记录
+        transaction.on_commit(
+            lambda sid=submission.id: _enqueue_judge(sid)
+        )
+
     record_audit(student, "submission.create",
                  f"{exam.id}#{problem_id} 第 {used + 1} 次")
     return submission, 200, True
@@ -339,6 +390,13 @@ def _submission_brief(submission, with_code=False):
         "nickname": submission.student.nickname,
         "language": submission.language,
         "status": submission.status,
+        "verdict": submission.verdict,
+        "score": submission.score,
+        "passedCount": submission.passed_count,
+        "totalCount": submission.total_count,
+        "needsReview": submission.needs_review,
+        "timeMs": submission.time_ms,
+        "memoryKb": submission.memory_kb,
         "created": _iso(submission.created),
     }
     if with_code:

@@ -35,6 +35,23 @@ def _validate_fields(content, partial=False):
             return None, "依赖镜像名过长"
         fields["image"] = image
 
+    # 判题资源限制：camelCase 入参 → 模型字段
+    limit_fields = [
+        ("timeLimitMs", "time_limit_ms", 100, 10000, "单用例时限"),
+        ("memoryLimitMb", "memory_limit_mb", 16, 1024, "内存上限"),
+        ("outputLimitKb", "output_limit_kb", 1, 10240, "输出上限"),
+    ]
+    for key, field, minimum, maximum, label in limit_fields:
+        if not has(key):
+            continue
+        try:
+            value = int(content.get(key))
+        except (TypeError, ValueError):
+            return None, f"{label}需为整数"
+        if value < minimum or value > maximum:
+            return None, f"{label}需在 {minimum}-{maximum} 之间"
+        fields[field] = value
+
     type_choices = [key for key, _ in Problem.TYPE_CHOICES]
     if has("type") or not partial:
         value = content.get("type") or Problem.TYPE_ENGINEERING
@@ -55,6 +72,23 @@ def _validate_fields(content, partial=False):
         fields["difficulty"] = value
 
     return fields, None
+
+
+def _validate_algorithm_content(problem_type, description, samples, existing=None):
+    """
+    算法题必须能判题：至少要有题面与一条测试用例。
+    samples 为 None 表示 PATCH 未携带用例，此时检查已有用例。
+    """
+    if problem_type != Problem.TYPE_ALGORITHM:
+        return None
+    if not str(description or "").strip():
+        return "算法题需要填写题目描述"
+    if samples is not None:
+        if len(samples) == 0:
+            return "算法题至少需要一条测试用例"
+    elif existing is not None and not existing.samples.exists():
+        return "算法题至少需要一条测试用例"
+    return None
 
 
 def _validate_samples(content):
@@ -128,6 +162,9 @@ class ProblemListView(APIView):
                     "difficulty": {"type": "string", "description": "easy / medium / hard"},
                     "starterCode": {"type": "string", "description": "初始代码"},
                     "image": {"type": "string", "description": "依赖镜像"},
+                    "timeLimitMs": {"type": "integer", "description": "单用例时限（毫秒）"},
+                    "memoryLimitMb": {"type": "integer", "description": "内存上限（MB）"},
+                    "outputLimitKb": {"type": "integer", "description": "输出上限（KB）"},
                     "samples": {
                         "type": "array",
                         "description": "测试样例列表：{name, input, expected, isSample}",
@@ -152,6 +189,13 @@ class ProblemListView(APIView):
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
         samples, error = _validate_samples(content)
+        if error:
+            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+        error = _validate_algorithm_content(
+            fields.get("type", Problem.TYPE_ENGINEERING),
+            content.get("description"),
+            samples or [],
+        )
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -201,6 +245,9 @@ class ProblemDetailView(APIView):
                     "difficulty": {"type": "string"},
                     "starterCode": {"type": "string"},
                     "image": {"type": "string"},
+                    "timeLimitMs": {"type": "integer"},
+                    "memoryLimitMb": {"type": "integer"},
+                    "outputLimitKb": {"type": "integer"},
                     "samples": {"type": "array"},
                 },
             }
@@ -226,6 +273,14 @@ class ProblemDetailView(APIView):
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
         samples, error = _validate_samples(content)
+        if error:
+            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+        error = _validate_algorithm_content(
+            fields.get("type", problem.type),
+            fields.get("description", problem.description),
+            samples,
+            existing=problem,
+        )
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
 

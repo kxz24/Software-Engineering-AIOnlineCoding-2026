@@ -41,7 +41,7 @@ const Tabs: { key: Tab; label: string }[] = [
  * 07 考试管理：真实数据。
  *
  * 闭环操作：创建（草稿）→ 组卷 → 名单 → 发布 → （结束）归档；
- * 已结束考试的提交记录跳转监考中心查看；成绩分析随评测服务接入。
+ * 已结束考试的提交记录跳转监考中心查看；判题结果在提交记录中展示。
  */
 export function ExamManagePage() {
     const [tab, setTab] = useState<Tab>("list");

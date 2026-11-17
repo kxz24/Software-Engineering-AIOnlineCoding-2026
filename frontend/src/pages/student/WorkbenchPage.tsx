@@ -17,6 +17,7 @@ import {
     submitCode,
 } from "../../api/client";
 import { AgentPlaceholder, CannedReplies, TerminalLines, formatClock } from "../../mock/workbench";
+import { submissionLabel } from "../../api/judge";
 
 type ProblemTabKey = "statement" | "samples" | "submissions";
 
@@ -127,7 +128,7 @@ interface AgentMessage {
  * 04 做题工作台：满屏工作区（题目 / 编辑器 / 终端 / Coding Agent）。
  *
  * 数据来自 /api/v1/my/exams/:id：题面、样例与初始代码由后端下发
- * （隐藏测试不会下发）；提交当前只收卷存档，判定结果随判题服务接入。
+ * （隐藏测试不会下发）；提交后在后台异步判题。
  * Agent 对话与终端为本地演示。
  */
 export function WorkbenchPage() {
@@ -311,7 +312,7 @@ export function WorkbenchPage() {
         setDraft("");
     };
 
-    /** 提交答卷：只收卷存档（status=pending），判定随判题服务接入 */
+    /** 提交答卷：入队异步判题，结果在结果页轮询 */
     const handleSubmit = () => {
         if (!detail || !problem) {
             return;
@@ -322,7 +323,7 @@ export function WorkbenchPage() {
         }
         const confirmed = window.confirm(
             `确认提交「任务 ${problem.order + 1}：${problem.title}」？\n` +
-            `评测服务接入前仅收卷存档；提交后本题剩余 ${remaining - 1} 次机会。`
+            `提交后在后台自动判题，本题剩余 ${remaining - 1} 次机会。`
         );
         if (!confirmed) {
             return;
@@ -345,7 +346,7 @@ export function WorkbenchPage() {
                     ...current,
                 ]);
                 setProblemTab("submissions");
-                toast(`已提交（待判定），本题剩余 ${result.remaining} 次`, "success");
+                toast(`已提交，正在判题，本题剩余 ${result.remaining} 次`, "success");
                 // 提交成功后进入 05 提交结果页查看收卷状态
                 history.push(Routes.examResult(detail.id));
             })
@@ -470,7 +471,7 @@ export function WorkbenchPage() {
                             </>
                         )}
                         <span className="meta-chip">{detail.submitLimit} 次提交 / 题</span>
-                        <span className="meta-chip green"><span className="status-dot"/>提交后待判定</span>
+                        <span className="meta-chip green"><span className="status-dot"/>提交后自动判题</span>
                     </div>
                     <div className="metabar-right">
                         <span>本地草稿自动保存</span>
@@ -535,7 +536,9 @@ export function WorkbenchPage() {
                                     <span className="tl-dot green"/>
                                     <div>
                                         <div className="tl-text">提交 #{item.id} · {item.problemTitle}</div>
-                                        <div className="tl-time">{timeOf(item.created)} · 待判定</div>
+                                        <div className="tl-time">
+                                            {timeOf(item.created)} · {submissionLabel(item).label}
+                                        </div>
                                     </div>
                                 </div>
                             ))}
@@ -610,7 +613,7 @@ export function WorkbenchPage() {
                                     ))}
                                     <p className="rule-line">
                                         <span className="label">提示：</span>
-                                        隐藏测试不会下发到浏览器，仅在判题时使用（判题服务接入后生效）。
+                                        隐藏测试不会下发到浏览器，仅在独立判题容器中运行。
                                     </p>
                                 </div>
                             )}
@@ -619,7 +622,7 @@ export function WorkbenchPage() {
                                 <div className="problem-body">
                                     <p className="rule-line">
                                         <span className="label">已用次数：</span>
-                                        {used} / {detail.submitLimit}（每次提交覆盖保存，判定随判题服务接入）
+                                        {used} / {detail.submitLimit}（每次提交自动判题，同一题取最高分）
                                     </p>
                                     {mySubmissions.length === 0 && (
                                         <p className="rule-line"><span className="label">暂无提交</span></p>
@@ -628,7 +631,10 @@ export function WorkbenchPage() {
                                         <details key={item.id} style={{ marginBottom: 8 }}>
                                             <summary style={{ cursor: "pointer", fontSize: 11.5 }}>
                                                 #{item.id} · {new Date(item.created).toLocaleString()} ·{" "}
-                                                <span className="badge gray">待判定</span>
+                                                {(() => {
+                                                    const meta = submissionLabel(item);
+                                                    return <span className={"badge " + meta.tone}>{meta.label}</span>;
+                                                })()}
                                             </summary>
                                             <pre style={{ ...SampleBoxStyle, marginTop: 6 }}>{item.code}</pre>
                                         </details>
@@ -796,11 +802,11 @@ export function WorkbenchPage() {
                 <footer className="statusbar">
                     <div className="status-left">
                         <span className="status-item"><span className="status-dot"/>本地作答模式</span>
-                        <span className="status-item">提交后待判定</span>
+                        <span className="status-item">提交后自动判题</span>
                     </div>
                     <div className="status-right">
                         <span className="status-item">{savedClock ? `草稿 ${savedClock}` : "自动保存已开启"}</span>
-                        <span className="status-item">判题容器随下一迭代接入</span>
+                        <span className="status-item">判题在后台独立容器中执行</span>
                     </div>
                 </footer>
             </div>

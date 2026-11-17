@@ -4,7 +4,16 @@ import { StudentLayout } from "../../layouts/StudentLayout";
 import { Icon } from "../../components/Icon";
 import { Routes } from "../../api/urls";
 import { formatDateTime } from "../../api/format";
-import { ApiError, fetchMyExam, fetchMyExamSubmissions, MySubmission, StudentExamDetail } from "../../api/client";
+import {
+    ApiError,
+    fetchMyExam,
+    fetchMyExamSubmissions,
+    fetchSubmission,
+    MySubmission,
+    StudentExamDetail,
+    SubmissionDetail,
+} from "../../api/client";
+import { isPending, submissionLabel, verdictMeta } from "../../api/judge";
 
 /** 代码正文展示块 */
 const CodeBoxStyle: React.CSSProperties = {
@@ -20,15 +29,24 @@ const CodeBoxStyle: React.CSSProperties = {
     wordBreak: "break-all",
 };
 
+function formatMs(value: number): string {
+    return `${((value || 0) / 1000).toFixed(2)}s`;
+}
+
+function formatMemory(value: number): string {
+    return `${Math.round((value || 0) / 1024)} MB`;
+}
+
 /**
- * 05 提交结果：最近一次提交的收卷状态与提交历史。
- * 判定结果（得分、用例通过情况）随评测服务接入后展示。
+ * 05 提交结果：最近一次提交的判题状态、得分与用例结果。
+ * 判题异步执行，页面在 pending / judging 时每 2 秒轮询一次。
  */
 export function ResultPage() {
     const { examId } = useParams<{ examId: string }>();
 
     const [exam, setExam] = useState<StudentExamDetail | null>(null);
     const [submissions, setSubmissions] = useState<MySubmission[]>([]);
+    const [detail, setDetail] = useState<SubmissionDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -36,8 +54,8 @@ export function ResultPage() {
         setLoading(true);
         setError(null);
         Promise.all([fetchMyExam(Number(examId)), fetchMyExamSubmissions(Number(examId))])
-            .then(([detail, result]) => {
-                setExam(detail);
+            .then(([examDetail, result]) => {
+                setExam(examDetail);
                 setSubmissions(result.submissions);
                 setLoading(false);
             })
@@ -49,10 +67,71 @@ export function ResultPage() {
 
     useEffect(load, [examId]);
 
+    // 轮询最新提交的判题结果：pending / judging 时继续，最多约 2 分钟
+    useEffect(() => {
+        if (submissions.length === 0) {
+            setDetail(null);
+            return;
+        }
+        const latestId = submissions[0].id;
+        let cancelled = false;
+        let attempts = 0;
+        let timer: number | undefined;
+
+        setDetail(current => (current && current.id === latestId ? current : null));
+
+        const tick = () => {
+            fetchSubmission(latestId)
+                .then(result => {
+                    if (cancelled) {
+                        return;
+                    }
+                    setDetail(result);
+                    if (isPending(result.status) && attempts < 60) {
+                        attempts += 1;
+                        timer = window.setTimeout(tick, 2000);
+                    }
+                })
+                .catch((e: ApiError) => {
+                    if (cancelled) {
+                        return;
+                    }
+                    // 提交被删除 / 无权查看时不再重试，避免无意义轮询
+                    if (e.status === 401 || e.status === 403 || e.status === 404) {
+                        return;
+                    }
+                    if (attempts < 60) {
+                        attempts += 1;
+                        timer = window.setTimeout(tick, 3000);
+                    }
+                });
+        };
+        tick();
+
+        return () => {
+            cancelled = true;
+            if (timer) {
+                window.clearTimeout(timer);
+            }
+        };
+    }, [submissions]);
+
     const latest = submissions.length > 0 ? submissions[0] : null;
     const totalUsed = submissions.length;
     const totalQuota = exam ? exam.problems.length * exam.submitLimit : 0;
     const finished = exam?.status === "finished";
+
+    const problemScore = exam && detail
+        ? (exam.problems.find(item => item.problemId === detail.problemId)?.score || 0)
+        : 0;
+    const judged = detail?.status === "judged";
+    const failed = detail?.status === "failed";
+    const pending = detail ? isPending(detail.status) : !!latest && isPending(latest.status);
+    const verdict = detail ? submissionLabel(detail) : null;
+
+    const scoreText = judged
+        ? String(detail?.score ?? 0)
+        : failed ? "—" : (latest ? "判题中" : "—");
 
     const metrics = exam ? [
         { value: latest ? `#${latest.id}` : "—", label: "本次提交" },
@@ -95,22 +174,54 @@ export function ResultPage() {
 
             {exam && !loading && (
                 <>
-                    {/* 收卷概览：评测服务接入前没有得分，状态为待判定 */}
                     <div className="result-summary">
                         <div className="score-block">
                             <div className="score-label">当前状态</div>
-                            <div className="score-value">待判定</div>
+                            <div className="score-value">
+                                {scoreText}
+                                {judged && <span style={{ fontSize: 14, color: "#94a3b8" }}> / {problemScore}</span>}
+                            </div>
                             <div className="score-status">
-                                <span className="badge green">已收卷</span>
-                                <span className="badge amber">等待评测</span>
+                                {verdict && <span className={"badge " + verdict.tone}>{verdict.label}</span>}
+                                {judged && detail && (
+                                    <span className="badge gray">
+                                        用例 {detail.passedCount}/{detail.totalCount}
+                                    </span>
+                                )}
+                                {detail?.needsReview && <span className="badge amber">需人工复核</span>}
                             </div>
                             <div className="score-note">
-                                代码已存档（提交 {latest ? `#${latest.id}` : "—"}）；
-                                得分与用例结果将在评测服务接入后展示。
+                                {latest
+                                    ? `提交 #${latest.id}${judged ? ` · 得分 ${detail?.score ?? 0} 分` : pending ? " · 正在判题…" : ""}`
+                                    : "还没有提交记录"}
+                                {detail?.judgeError ? ` · ${detail.judgeError}` : ""}
                             </div>
                         </div>
                         <div className="score-metrics">
-                            {metrics.map((metric, index) => (
+                            {judged && detail ? (
+                                <>
+                                    <div className="metric first">
+                                        <div className="metric-value">
+                                            {detail.samplePassed}/{detail.sampleTotal}
+                                        </div>
+                                        <div className="metric-label">样例测试</div>
+                                    </div>
+                                    <div className="metric">
+                                        <div className="metric-value">
+                                            {detail.hiddenPassed}/{detail.hiddenTotal}
+                                        </div>
+                                        <div className="metric-label">隐藏测试</div>
+                                    </div>
+                                    <div className="metric">
+                                        <div className="metric-value">{formatMs(detail.timeMs)}</div>
+                                        <div className="metric-label">最大耗时</div>
+                                    </div>
+                                    <div className="metric">
+                                        <div className="metric-value">{formatMemory(detail.memoryKb)}</div>
+                                        <div className="metric-label">峰值内存</div>
+                                    </div>
+                                </>
+                            ) : metrics.map((metric, index) => (
                                 <div className={"metric" + (index === 0 ? " first" : "")} key={metric.label}>
                                     <div className={"metric-value" + (metric.tone ? " " + metric.tone : "")}>
                                         {metric.value}
@@ -132,7 +243,7 @@ export function ResultPage() {
                                             : "还没有提交记录"}
                                     </div>
                                 </div>
-                                <span className="badge gray">待判定</span>
+                                {verdict && <span className={"badge " + verdict.tone}>{verdict.label}</span>}
                             </div>
                             {latest ? (
                                 <div className="card-body">
@@ -155,24 +266,28 @@ export function ResultPage() {
                                     {submissions.length === 0 && (
                                         <div className="muted" style={{ fontSize: 11.5 }}>暂无提交</div>
                                     )}
-                                    {submissions.map((item, index) => (
-                                        <div className={"submit-item" + (index === submissions.length - 1 ? " last" : "")}
-                                             key={item.id}>
-                                            <div className={index === 0 ? "submit-dot" : "submit-dot gray"}/>
-                                            <div>
-                                                <div className="submit-title">
-                                                    #{item.id} · {item.problemTitle}
+                                    {submissions.map((item, index) => {
+                                        const meta = submissionLabel(item);
+                                        return (
+                                            <div className={"submit-item" + (index === submissions.length - 1 ? " last" : "")}
+                                                 key={item.id}>
+                                                <div className={index === 0 ? "submit-dot" : "submit-dot gray"}/>
+                                                <div>
+                                                    <div className="submit-title">
+                                                        #{item.id} · {item.problemTitle}
+                                                    </div>
+                                                    <div className="submit-time">
+                                                        {formatDateTime(item.created)} · {item.language} · {meta.label}
+                                                        {item.status === "judged" ? ` · ${item.score ?? 0} 分` : ""}
+                                                    </div>
                                                 </div>
-                                                <div className="submit-time">
-                                                    {formatDateTime(item.created)} · {item.language} · 待判定
-                                                </div>
+                                                {index === 0 && <span className="badge green">最新</span>}
                                             </div>
-                                            {index === 0 && <span className="badge green">最新</span>}
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                     <div className="submit-rule">
                                         <Icon name="clock" size={11}/>
-                                        每题限交 {exam.submitLimit} 次；评测接入前提交仅收卷存档。
+                                        每题限交 {exam.submitLimit} 次；同一题取最高分。
                                     </div>
                                 </div>
                             </div>
@@ -198,6 +313,56 @@ export function ResultPage() {
                             </div>
                         </div>
                     </div>
+
+                    {detail && detail.cases.length > 0 && (
+                        <div className="card result-table-card" style={{ marginTop: 14 }}>
+                            <div className="card-head">
+                                <div>
+                                    <div className="card-title">用例结果</div>
+                                    <div className="card-sub">
+                                        隐藏用例仅显示汇总结果，不展示输入与预期输出
+                                    </div>
+                                </div>
+                                <span className="badge blue">共 {detail.cases.length} 个用例</span>
+                            </div>
+                            <table className="table">
+                                <thead>
+                                <tr>
+                                    <th>用例</th>
+                                    <th>类型</th>
+                                    <th>结果</th>
+                                    <th>耗时</th>
+                                    <th>内存</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                {detail.cases.map((item, index) => {
+                                    const meta = verdictMeta(item.verdict);
+                                    return (
+                                        <tr key={index}>
+                                            <td>{item.name}</td>
+                                            <td>{item.isSample ? "样例" : "隐藏"}</td>
+                                            <td><span className={"badge " + meta.tone}>{meta.label}</span></td>
+                                            <td>{formatMs(item.timeMs)}</td>
+                                            <td>{formatMemory(item.memoryKb)}</td>
+                                        </tr>
+                                    );
+                                })}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
+                    {detail?.compileOutput && (
+                        <div className="card" style={{ marginTop: 14 }}>
+                            <div className="card-head">
+                                <div className="card-title">编译输出</div>
+                            </div>
+                            <div className="card-body">
+                                <pre style={CodeBoxStyle}>{detail.compileOutput}</pre>
+                            </div>
+                        </div>
+                    )}
                 </>
             )}
         </StudentLayout>

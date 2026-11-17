@@ -8,7 +8,7 @@ import { ApiError, fetchMyExams, MyExamSummary } from "../../api/client";
 
 /**
  * 成绩报告首页：列出可查看报告的考试。
- * 评测服务接入前报告展示收卷与提交统计，不展示分数。
+ * 报告展示每题最高分之和与提交统计；过程评分随后续迭代开放。
  */
 export function ReportsPage() {
     const [exams, setExams] = useState<MyExamSummary[]>([]);
@@ -40,7 +40,7 @@ export function ReportsPage() {
             <div className="page-head">
                 <div>
                     <div className="page-title">成绩报告</div>
-                    <div className="page-sub">按考试查看提交情况；得分与过程评分随评测服务接入后展示</div>
+                    <div className="page-sub">按考试查看提交情况与最高分；过程评分随后续迭代开放</div>
                 </div>
                 <div className="page-actions">
                     <Link className="btn btn-secondary" to={Routes.examList}>
@@ -92,7 +92,10 @@ export function ReportsPage() {
                             </td>
                             <td>{formatPeriod(exam.startTime, exam.endTime)}</td>
                             <td>{exam.mySubmissions} 次</td>
-                            <td className="muted">待判定</td>
+                            <td>
+                                <span className="strong">{exam.myBestScore ?? 0}</span>
+                                <span className="muted"> / {exam.maxScore ?? 0}</span>
+                            </td>
                             <td>
                                 <Link className="link" to={Routes.examReport(exam.id)}>查看报告</Link>
                             </td>
@@ -102,7 +105,7 @@ export function ReportsPage() {
                 </table>
                 <div className="table-footer">
                     <span>进行中 / 待考 {active.length} 场（在「我的考试」进入）</span>
-                    <span className="muted">评测服务接入前不展示分数</span>
+                    <span className="muted">成绩取每题最高分</span>
                 </div>
             </div>
         </StudentLayout>

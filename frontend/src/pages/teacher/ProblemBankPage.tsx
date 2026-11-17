@@ -19,6 +19,12 @@ const TypeLabels: Record<string, string> = {
     algorithm: "算法题",
 };
 
+/** 表单里的题型选项：直接标出当前是否支持自动判题 */
+const TypeOptionLabels: Record<string, string> = {
+    algorithm: "算法题（自动判题）",
+    engineering: "工程题（暂不支持自动判题）",
+};
+
 const LanguageLabels: Record<string, string> = {
     python: "Python",
     cpp: "C++",
@@ -51,18 +57,24 @@ interface ProblemForm {
     image: string;
     description: string;
     starterCode: string;
+    timeLimitMs: number;
+    memoryLimitMb: number;
+    outputLimitKb: number;
     samples: SampleForm[];
 }
 
 const EmptyForm: ProblemForm = {
     id: null,
     title: "",
-    type: "engineering",
+    type: "algorithm",
     language: "python",
     difficulty: "medium",
     image: "",
     description: "",
     starterCode: "",
+    timeLimitMs: 2000,
+    memoryLimitMb: 256,
+    outputLimitKb: 1024,
     samples: [],
 };
 
@@ -146,6 +158,9 @@ export function ProblemBankPage() {
                     image: detail.image,
                     description: detail.description,
                     starterCode: detail.starterCode,
+                    timeLimitMs: detail.timeLimitMs,
+                    memoryLimitMb: detail.memoryLimitMb,
+                    outputLimitKb: detail.outputLimitKb,
                     samples: detail.samples.map(sample => ({
                         name: sample.name,
                         input: sample.input,
@@ -165,6 +180,16 @@ export function ProblemBankPage() {
             setFormError("请填写题目标题。");
             return;
         }
+        if (form.type === "algorithm") {
+            if (!form.description.trim()) {
+                setFormError("算法题需要填写题目描述。");
+                return;
+            }
+            if (form.samples.length === 0) {
+                setFormError("算法题至少需要一条测试用例。");
+                return;
+            }
+        }
         if (form.samples.some(sample => !sample.name.trim())) {
             setFormError("每个测试用例都需要名称。");
             return;
@@ -179,6 +204,9 @@ export function ProblemBankPage() {
             difficulty: form.difficulty,
             image: form.image.trim(),
             starterCode: form.starterCode,
+            timeLimitMs: Number(form.timeLimitMs),
+            memoryLimitMb: Number(form.memoryLimitMb),
+            outputLimitKb: Number(form.outputLimitKb),
             samples: form.samples,
         };
         try {
@@ -304,7 +332,7 @@ export function ProblemBankPage() {
                                        onChange={event => setForm({ ...form, title: event.target.value })}/>
                             </div>
                             <div className="field">
-                                <div className="label">依赖镜像（可选）</div>
+                                <div className="label">依赖镜像（预留，暂不生效）</div>
                                 <input className="input"
                                        style={SmallInputStyle}
                                        value={form.image}
@@ -317,8 +345,8 @@ export function ProblemBankPage() {
                                         style={SmallInputStyle}
                                         value={form.type}
                                         onChange={event => setForm({ ...form, type: event.target.value })}>
-                                    {Object.keys(TypeLabels).map(key => (
-                                        <option key={key} value={key}>{TypeLabels[key]}</option>
+                                    {Object.keys(TypeOptionLabels).map(key => (
+                                        <option key={key} value={key}>{TypeOptionLabels[key]}</option>
                                     ))}
                                 </select>
                             </div>
@@ -344,7 +372,47 @@ export function ProblemBankPage() {
                                     ))}
                                 </select>
                             </div>
+                            <div className="field">
+                                <div className="label">单用例时限（毫秒）</div>
+                                <input className="input"
+                                       type="number"
+                                       min={100}
+                                       max={10000}
+                                       style={SmallInputStyle}
+                                       value={form.timeLimitMs}
+                                       onChange={event => setForm({ ...form, timeLimitMs: Number(event.target.value) })}/>
+                            </div>
+                            <div className="field">
+                                <div className="label">内存上限（MB）</div>
+                                <input className="input"
+                                       type="number"
+                                       min={16}
+                                       max={1024}
+                                       style={SmallInputStyle}
+                                       value={form.memoryLimitMb}
+                                       onChange={event => setForm({ ...form, memoryLimitMb: Number(event.target.value) })}/>
+                            </div>
+                            <div className="field">
+                                <div className="label">输出上限（KB）</div>
+                                <input className="input"
+                                       type="number"
+                                       min={1}
+                                       max={10240}
+                                       style={SmallInputStyle}
+                                       value={form.outputLimitKb}
+                                       onChange={event => setForm({ ...form, outputLimitKb: Number(event.target.value) })}/>
+                            </div>
                         </div>
+                        {form.type === "algorithm" ? (
+                            <div className="card-sub" style={{ marginTop: 8 }}>
+                                算法题：填写题面并添加测试用例即可创建；语言、时限、内存有默认值。
+                                建议至少添加一条隐藏用例用于判分。
+                            </div>
+                        ) : (
+                            <div className="card-sub" style={{ marginTop: 8 }}>
+                                工程题暂不支持自动判题，提交后会标记为「需人工复核」。
+                            </div>
+                        )}
 
                         <div className="field" style={{ marginTop: 12 }}>
                             <div className="label">题面（Markdown）</div>

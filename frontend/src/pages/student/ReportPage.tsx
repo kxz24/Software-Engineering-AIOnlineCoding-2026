@@ -7,6 +7,7 @@ import { Routes } from "../../api/urls";
 import { formatDateTime } from "../../api/format";
 import { Store } from "../../store";
 import { ApiError, fetchMyExam, fetchMyExamSubmissions, MySubmission, StudentExamDetail } from "../../api/client";
+import { submissionLabel } from "../../api/judge";
 
 const AiModeLabels: Record<string, string> = { limited: "受限", open: "开放", closed: "关闭" };
 
@@ -51,8 +52,25 @@ export function ReportPage() {
         }));
     }, [exam, submissions]);
 
+    /** 每题的最高已判分（同一题多次提交取最高分） */
+    const bestByProblem = useMemo(() => {
+        const map = new Map<number, number>();
+        submissions.forEach(item => {
+            if (item.status === "judged") {
+                map.set(item.problemId, Math.max(map.get(item.problemId) || 0, item.score || 0));
+            }
+        });
+        return map;
+    }, [submissions]);
+
     const involved = perProblem.filter(item => item.used > 0).length;
     const finished = exam?.status === "finished";
+    const bestTotal = exam
+        ? exam.problems.reduce((sum, problem) => sum + (bestByProblem.get(problem.problemId) || 0), 0)
+        : 0;
+    const maxTotal = exam
+        ? exam.problems.reduce((sum, problem) => sum + problem.score, 0)
+        : 0;
 
     return (
         <StudentLayout active="reports">
@@ -93,10 +111,10 @@ export function ReportPage() {
                     {/* 总览：评测接入前没有分数，展示收卷状态 */}
                     <div className="report-summary">
                         <div className="rs-score">
-                            <div className="rs-label">当前状态</div>
-                            <div className="rs-value">待判定</div>
+                            <div className="rs-label">当前最高分</div>
+                            <div className="rs-value">{bestTotal} <span>/ {maxTotal}</span></div>
                             <div className="rs-note">
-                                {finished ? "考试已结束，等待评测" : "考试进行中或待开始"}
+                                {finished ? "考试已结束，成绩取每题最高分" : "考试进行中，分数随判题更新"}
                             </div>
                         </div>
                         <div className="rs-item">
@@ -122,7 +140,7 @@ export function ReportPage() {
                             <div className="card-head">
                                 <div>
                                     <div className="card-title">提交时间线</div>
-                                    <div className="card-sub">按时间倒序；判定结果随评测服务接入后补充</div>
+                                    <div className="card-sub">按时间倒序</div>
                                 </div>
                                 <span className="badge gray">共 {submissions.length} 次提交</span>
                             </div>
@@ -142,7 +160,8 @@ export function ReportPage() {
                                                 提交 #{item.id} · {item.problemTitle}
                                             </div>
                                             <div className="tl-desc">
-                                                {item.language} · 已收卷 · 待判定
+                                                {item.language} · {submissionLabel(item).label}
+                                                {item.status === "judged" ? ` · ${item.score ?? 0} 分` : ""}
                                             </div>
                                         </div>
                                     </div>
@@ -169,8 +188,8 @@ export function ReportPage() {
                                                       style={{ width: `${Math.min(100, used / exam.submitLimit * 100)}%` }}/>
                                             </div>
                                             <div className="rubric-ev">
-                                                {problem.score} 分 · {problem.type === "algorithm" ? "算法题" : "工程题"} ·{" "}
-                                                {problem.language}
+                                                最高 {bestByProblem.get(problem.problemId) || 0} / {problem.score} 分 ·{" "}
+                                                {problem.type === "algorithm" ? "算法题" : "工程题"} · {problem.language}
                                             </div>
                                         </div>
                                     ))}
@@ -203,9 +222,9 @@ export function ReportPage() {
                             <div className="card tip-card">
                                 <div className="tip-icon"><Icon name="sparkles" size={15}/></div>
                                 <div>
-                                    <div className="tip-title">评分与申诉随后续迭代开放</div>
+                                    <div className="tip-title">过程评分与申诉随后续迭代开放</div>
                                     <div className="tip-desc">
-                                        得分明细、AI 协作过程评分与成绩申诉依赖评测与过程数据服务。
+                                        代码判分已接入；AI 协作过程评分与成绩申诉依赖过程数据服务。
                                     </div>
                                 </div>
                             </div>

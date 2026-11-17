@@ -39,7 +39,7 @@ function pickFeatured(exams: MyExamSummary[]): MyExamSummary | null {
     return upcoming[0] || null;
 }
 
-/** 02 我的考试：真实数据。成绩列待判题服务接入后开放 */
+/** 02 我的考试：真实数据。成绩列展示每题最高分之和 */
 export function ExamListPage() {
     const [filter, setFilter] = useState<Filter>("all");
     const [exams, setExams] = useState<MyExamSummary[]>([]);
@@ -168,7 +168,7 @@ export function ExamListPage() {
                         <div className="stat-value">{submissionTotal}</div>
                         <div className="stat-label">我的提交</div>
                     </div>
-                    <span className="stat-trend">判题服务接入前不计分</span>
+                    <span className="stat-trend">成绩取每题最高分</span>
                 </div>
             </div>
 
@@ -222,7 +222,10 @@ export function ExamListPage() {
                                 <td>{exam.durationMinutes} 分钟</td>
                                 <td>{AiModeLabels[exam.aiMode] || exam.aiMode}</td>
                                 <td>{statusBadge(exam.studentStatus)}</td>
-                                <td className="muted">—</td>
+                                <td>
+                                    <span className="strong">{exam.myBestScore ?? 0}</span>
+                                    <span className="muted"> / {exam.maxScore ?? 0}</span>
+                                </td>
                                 <td>
                                     {exam.studentStatus === "finished"
                                         ? <Link className="link" to={Routes.examReport(exam.id)}>查看报告</Link>
@@ -234,7 +237,7 @@ export function ExamListPage() {
                     </table>
                     <div className="table-footer">
                         <span>当前显示 {visible.length} / {exams.length} 场</span>
-                        <span className="muted">成绩统计随判题服务接入后开放</span>
+                        <span className="muted">成绩取每题最高分</span>
                     </div>
                 </div>
 

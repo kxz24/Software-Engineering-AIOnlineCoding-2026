@@ -73,7 +73,8 @@ python manage.py shell -c "from user.models import User; from utils.jwt import e
 | `/api/v1/my/exams` | GET | 学生 | 我的考试列表（含各场我的提交数） |
 | `/api/v1/my/exams/:id` | GET | 学生 | 考试详情：题面 + 样例测试 + 初始代码（**不下发隐藏测试**） |
 | `/api/v1/my/exams/:id/submissions` | GET | 学生 | 我在本场考试的提交记录 |
-| `/api/v1/my/exams/:id/problems/:pid/submissions` | GET / POST | 学生 | 某题提交历史（含代码）/ 提交答卷（发布时段内、按题限次，只收卷待判定） |
+| `/api/v1/my/exams/:id/problems/:pid/submissions` | GET / POST | 学生 | 某题提交历史（含代码）/ 提交答卷（发布时段内、按题限次，异步判题） |
+| `/api/v1/submissions/:id` | GET | 本人 / 教师 / 管理员 | 单条提交详情、得分与用例判定（隐藏用例不返回输入/期望/输出） |
 
 另有 `/api/schema/swagger-ui/` 与 `/api/schema/redoc/` 在线接口文档（Django 后台登录后可看）。
 
@@ -90,9 +91,11 @@ python manage.py shell -c "from user.models import User; from utils.jwt import e
 ## 数据模型
 
 - `user.User`：账号（username 唯一）、姓名、邮箱、角色（student / teacher / admin）、密码散列。
-- `user.AuditLog`：操作人、动作（login / register / account.* / problem.*）、详情、时间；
+- `user.AuditLog`：操作人、动作（登录 / 注册 / 账号变更 / 题库变更等）、详情、时间；
   登录、注册与账号、题库操作均自动落库。
-- `problem.Problem`：题面（Markdown）、题型（工程 / 算法）、语言、难度、初始代码、依赖镜像、创建人。
+- `problem.Problem`：题面（Markdown）、题型（工程 / 算法）、语言、难度、初始代码、
+  依赖镜像（预留字段，当前统一使用 `JUDGE_IMAGE`）、
+  单用例时限（默认 2000ms）、内存上限（默认 256MB）、输出上限（默认 1024KB）、创建人。
 - `problem.TestSample`：所属题目、名称、输入、期望输出、是否样例；
   **样例对学生可见，隐藏用例仅判分使用**，编辑题目时用例整体替换（≤100 条）。
 - `exam.Exam`：考试名称、课程、开始 / 结束时间、时长、每题提交上限、AI 策略
@@ -100,26 +103,80 @@ python manage.py shell -c "from user.models import User; from utils.jwt import e
   开考后配置冻结，归档需已结束。
 - `exam.ExamProblem` / `exam.ExamCandidate`：组卷条目（题序 + 分值）与考生名单
   （多对多）；名单为空表示全体学生可参加。
-- `exam.Submission`：学生提交（考试 / 题目 / 学生、代码、语言、状态 pending）；
-  判题服务接入前只收卷存档。
+- `exam.Submission`：学生提交（考试 / 题目 / 学生、代码、语言、状态）；
+  异步判题回填 verdict / score / 通过数 / 耗时 / 内存 / 编译输出 / 需人工复核等字段。
+- `exam.SubmissionCase`：单用例判定结果（样例名、是否样例、verdict、耗时、内存、摘要）；
+  隐藏用例不保存实际输出与错误信息。
+
+## 判题（Celery + Redis + Docker）
+
+提交接口只落库并立即返回 `pending`，由独立的 Celery worker 异步判题：
+
+```text
+POST 提交 → status=pending → judge_submission.delay(id)
+          → worker 领取（status=judging）
+          → Docker 一次性容器：编译 + 逐用例运行（禁网 / 限 CPU、内存、进程 / 只读根文件系统）
+          → 写回 status=judged|failed、verdict、score、SubmissionCase
+```
+
+- 判全部用例（样例 + 隐藏），按通过比例给分：`score = round(题目分值 × 通过数 / 总数)`。
+- 同一题多次提交取最高分展示（`myBestScore` / `bestScore`）。
+- 判题失败（Docker 不可用、无测试用例等）标记 `failed` 且 `needs_review=True`，供教师人工复核。
+- 隐藏用例只进入临时沙箱容器，结果接口只返回判定、耗时与内存，不返回输入/期望/实际输出。
+
+### 本地启动判题
+
+```bash
+# 1) Redis（或已有本地 Redis）
+docker run -d --name aicoding-redis -p 6379:6379 redis:7-alpine
+
+# 2) 判题镜像（在仓库根目录）
+docker build -t aicoding-judge:latest -f backend/judge/Dockerfile backend/judge
+
+# 3) worker（Windows 必须用 solo 池）
+cd backend
+celery -A app worker --pool=solo -l info
+
+# 4) 不经过 Celery，同步判一条（调试用）
+python manage.py judge_once <submission_id> --force
+
+# 5) Redis 故障或 worker 中断后的兜底
+python manage.py judge_requeue
+```
+
+`CELERY_BROKER_URL`、`JUDGE_IMAGE`、`JUDGE_ENQUEUE_ENABLED` 等配置见 `app/settings.py` 的「判题服务」一节。
 
 ## 测试
 
 ```bash
-python manage.py test user problem exam   # 35 个用例：注册 / 登录 / RBAC / 导入 / 审计 / 题库 / 考场闭环
-python manage.py check
+python manage.py test user problem exam judge   # 含判题纯函数、任务状态机、权限与隐藏数据测试
+python manage.py test judge                     # 仅判题相关
+manage.py check
+```
+
+判题集成测试（需要 Docker 与 `aicoding-judge` 镜像）：
+
+```bash
+JUDGE_INTEGRATION=1 python manage.py test judge.tests.JudgeTaskTests
 ```
 
 ## 部署（docker-compose）
 
 ```bash
+# 先构建判题沙箱镜像（只需在镜像变更时执行）
+docker compose --profile build build judge-base
+# 再启动 redis / app / judge / nginx / mysql
 docker compose up -d --build
 ```
 
-拓扑：`nginx（宿主机 8000）→ app（gunicorn，settings_prod）→ mysql`。
-`settings.py` 里的 `JWT_SECRET` 与 `settings_prod.py` 里的 MySQL 口令目前是课程模板的占位值，
-正式部署前改为环境变量注入。
-前端构建产物由 nginx 直接托管，`/api` 反向代理到 app 容器（见 `nginx/app.conf`）。
+拓扑：`nginx（宿主机 8000）→ app（gunicorn，settings_prod）→ mysql`；
+`app ──Redis──> judge worker ──docker.sock──> 一次性沙箱容器`。
+
+- `judge` 服务挂载 `/var/run/docker.sock`，等价宿主机 root 权限，只能放在受信任的判题服务中；
+- 沙箱容器本身禁用网络、丢弃全部 capabilities、非 root、只读根文件系统，判完即删；
+- `settings.py` 里的 `JWT_SECRET` 与 `settings_prod.py` 里的 MySQL 口令目前是课程模板的占位值，
+  正式部署前改为环境变量注入；
+- 前端构建产物由 nginx 直接托管，`/api` 反向代理到 app 容器（见 `nginx/app.conf`）。
 
 ## 约定
 
@@ -129,3 +186,6 @@ docker compose up -d --build
   与前端 TypeScript 类型一一对应。
 - 新增接口时：先在应用 `controllers.py` 写业务函数，`views.py` 只做校验与响应组装，
   并用 `@extend_schema`（drf-spectacular）补接口描述。
+- 算法题创建 / 编辑时必须提供题目描述与至少一条测试用例（否则无法判题）；
+  语言、难度、时限、内存有默认值，可只填标题 + 题面 + 用例。
+  用例分为样例（`isSample=true`，学生可见）与隐藏用例（`isSample=false`，仅判分）。

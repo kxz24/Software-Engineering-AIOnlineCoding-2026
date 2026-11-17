@@ -15,6 +15,17 @@ PyJWT==2.7.0
 django-cors-headers==3.7.0
 drf-spectacular[sidecar]==0.27.2
 
+# 判题：异步队列（Celery + Redis）与 Docker 沙箱 SDK
+celery[redis]==5.3.6
+# Celery 5.3.x 配套的 kombu；新版 kombu 要求 redis-py>=6.1，与下面的 redis 5 冲突
+kombu==5.3.7
+redis==5.0.1
+docker==7.0.0
+# docker SDK 7.0.0 的 unix/npipe adapter 与 requests>=2.32 的 scheme 校验不兼容
+requests==2.31.0
+# Windows 本地开发：Docker SDK 通过 npipe 连接 Docker Desktop 需要
+pywin32==306; sys_platform == "win32"
+
 # 部署
 gunicorn==20.1.0
 # 2.0.3 的安装脚本依赖已被移除的 distutils.msvccompiler，在 Python 3.12+ /

@@ -128,11 +128,48 @@ class ProblemCRUDTestCase(TestCase):
             resp = self.client.post("/api/v1/problems", payload, format="json")
             self.assertEqual(resp.status_code, 400, payload)
 
+    def test_algorithm_requires_description_and_samples(self):
+        """算法题必须能判题：题面与至少一条测试用例缺一不可"""
+        base = {"title": "算法题", "type": "algorithm", "language": "cpp"}
+
+        resp = self.client.post("/api/v1/problems", base, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("题目描述", resp.json()["message"])
+
+        resp = self.client.post(
+            "/api/v1/problems",
+            {**base, "description": "求两数之和"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("测试用例", resp.json()["message"])
+
+        resp = self.client.post(
+            "/api/v1/problems",
+            {
+                **base,
+                "description": "求两数之和",
+                "samples": [
+                    {"name": "样例 1", "input": "1 2", "expected": "3", "isSample": True},
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+
     def test_detail_and_patch(self):
         """详情含题面与用例；PATCH 可换字段并整体替换用例"""
         created = self.client.post(
             "/api/v1/problems",
-            {"title": "两数之和", "type": "algorithm", "language": "cpp"},
+            {
+                "title": "两数之和",
+                "type": "algorithm",
+                "language": "cpp",
+                "description": "给定两个整数，求它们的和。",
+                "samples": [
+                    {"name": "样例 1", "input": "2,3", "expected": "5", "isSample": True},
+                ],
+            },
             format="json",
         ).json()
 
@@ -188,7 +225,16 @@ class ProblemCRUDTestCase(TestCase):
             "/api/v1/problems", {"title": "修复排序", "type": "engineering"}, format="json"
         )
         self.client.post(
-            "/api/v1/problems", {"title": "两数之和", "type": "algorithm"}, format="json"
+            "/api/v1/problems",
+            {
+                "title": "两数之和",
+                "type": "algorithm",
+                "description": "求两数之和",
+                "samples": [
+                    {"name": "样例 1", "input": "1 2", "expected": "3", "isSample": True},
+                ],
+            },
+            format="json",
         )
 
         resp = self.client.get("/api/v1/problems", {"keyword": "排序"})
