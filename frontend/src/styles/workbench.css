@@ -303,7 +303,7 @@
     font-size: 10px; display: flex; align-items: center; gap: 4px;
     background: #ffffff;
   }
-  .wb-root .chat { flex: 1; min-height: 0; padding: 12px 14px; overflow: hidden; }
+  .wb-root .chat { flex: 1; min-height: 0; padding: 12px 14px; overflow-y: auto; overflow-x: hidden; }
   .wb-root .msg-user { display: flex; justify-content: flex-end; margin-bottom: 10px; }
   .wb-root .msg-user .bubble {
     max-width: 300px; background: #eff6ff; color: #1e3a8a;
@@ -321,6 +321,51 @@
   }
   .wb-root .agent-card p { margin: 0 0 4px; font-size: 11px; line-height: 1.55; color: #334155; }
   .wb-root .agent-card p:last-child { margin-bottom: 0; }
+  .wb-root .agent-tabs {
+    display: flex; align-items: center; gap: 12px;
+    padding: 7px 14px 0; border-bottom: 1px solid #eef2f7; flex-shrink: 0;
+  }
+  .wb-root .agent-tab {
+    font-size: 10.5px; color: #64748b; cursor: pointer;
+    padding-bottom: 6px; border-bottom: 2px solid transparent;
+  }
+  .wb-root .agent-tab.active { color: #6d28d9; font-weight: 700; border-bottom-color: #7c3aed; }
+  .wb-root .agent-tab-hint { margin-left: auto; font-size: 9px; color: #a8b3c2; padding-bottom: 6px; }
+  .wb-root .agent-notice {
+    background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+    padding: 8px 10px; margin-bottom: 10px;
+    font-size: 10.5px; line-height: 1.55; color: #64748b;
+  }
+  .wb-root .agent-notice.error { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+  .wb-root .agent-text { white-space: pre-wrap; font-size: 11px; line-height: 1.55; color: #334155; }
+  .wb-root .agent-code {
+    margin: 6px 0; padding: 6px 8px;
+    background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 9.5px; line-height: 1.6; white-space: pre-wrap;
+    overflow-x: auto;
+  }
+  .wb-root .agent-tool {
+    display: flex; gap: 6px; align-items: baseline;
+    margin-bottom: 6px; padding: 4px 8px;
+    background: #fbfbfe; border-left: 2px solid #ddd6fe;
+    font-size: 9.5px; color: #64748b;
+  }
+  .wb-root .agent-tool-name { color: #6d28d9; font-weight: 600; white-space: nowrap; }
+  .wb-root .agent-tool-result { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wb-root .agent-change {
+    border: 1px solid #e2e8f0; border-radius: 8px;
+    padding: 8px 10px; margin-bottom: 8px; background: #ffffff;
+  }
+  .wb-root .agent-change-head { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+  .wb-root .agent-change-path { font-size: 10.5px; font-weight: 600; color: #334155; }
+  .wb-root .agent-diff {
+    margin: 0; max-height: 220px; overflow: auto;
+    background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
+    padding: 6px 8px; white-space: pre;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 9.5px; line-height: 1.5; color: #334155;
+  }
   .wb-root .diff-box {
     background: #f8fafc; border: 1px solid #e2e8f0;
     border-radius: 6px; padding: 5px 8px; margin-top: 5px;
@@ -362,7 +407,10 @@
     width: 30px; height: 30px; border-radius: 8px;
     background: #7c3aed; color: #ffffff; border: none;
     display: flex; align-items: center; justify-content: center;
+    font-size: 9px;
   }
+  .wb-root .send-btn:disabled { background: #c4b5fd; cursor: not-allowed; }
+  .wb-root .agent-input textarea:disabled { color: #94a3b8; cursor: not-allowed; }
   .wb-root .agent-foot {
     margin-top: 5px; font-size: 9.5px; color: #a8b3c2;
     display: flex; align-items: center; gap: 5px;

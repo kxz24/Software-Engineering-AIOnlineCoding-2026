@@ -16,7 +16,22 @@ import {
     StudentProblem,
     submitCode,
 } from "../../api/client";
-import { AgentPlaceholder, CannedReplies, TerminalLines, formatClock } from "../../mock/workbench";
+import {
+    AgentCapabilities,
+    AgentChangeRecord,
+    AgentChatMessage,
+    AgentSessionInfo,
+    AgentStreamEvent,
+    AgentWorkspaceFile,
+    createAgentSession,
+    fetchAgentCapabilities,
+    fetchAgentChanges,
+    fetchAgentMessages,
+    fetchAgentWorkspace,
+    revertAgentChange,
+    streamAgentMessage,
+} from "../../api/agent";
+import { TerminalLines, formatClock } from "../../mock/workbench";
 import { submissionLabel } from "../../api/judge";
 
 type ProblemTabKey = "statement" | "samples" | "submissions";
@@ -116,12 +131,59 @@ function renderInlineCode(text: string): React.ReactNode {
     );
 }
 
-interface AgentMessage {
-    id: string;
-    role: "user" | "agent";
-    text?: string;
-    time?: string;
-    paragraphs?: string[];
+interface AgentToolView {
+    callId: string;
+    name: string;
+    arguments: Record<string, unknown>;
+    ok?: boolean;
+    result?: string;
+}
+
+/** AI 回复：按 ``` 代码块拆开渲染，文本保留换行 */
+function renderAgentText(text: string): React.ReactNode {
+    const parts = text.split("```");
+    return parts.map((part, index) => {
+        if (index % 2 === 1) {
+            const code = part.replace(/^[A-Za-z0-9_+#.-]*\n/, "");
+            return <pre className="agent-code" key={index}>{code}</pre>;
+        }
+        return <div className="agent-text" key={index}>{renderInlineCode(part)}</div>;
+    });
+}
+
+/** 历史消息渲染：用户气泡 / AI 卡片 / 工具结果 */
+function renderAgentMessage(message: AgentChatMessage): React.ReactNode {
+    if (message.role === "user") {
+        return (
+            <div className="msg-user" key={message.seq}>
+                <div className="bubble">{message.content}</div>
+            </div>
+        );
+    }
+    if (message.role === "assistant") {
+        return (
+            <div className="msg-agent" key={message.seq}>
+                <div className="agent-meta">
+                    <span className="name">Coding Agent</span>
+                    <span className="time">{formatClock(new Date(message.created))}</span>
+                </div>
+                {message.content && (
+                    <div className="agent-card">{renderAgentText(message.content)}</div>
+                )}
+            </div>
+        );
+    }
+    if (message.role === "tool") {
+        return (
+            <div className="agent-tool" key={message.seq}>
+                <span className="agent-tool-name">工具 · {message.name || "tool"}</span>
+                <span className="agent-tool-result">
+                    {(message.content || "").slice(0, 160)}
+                </span>
+            </div>
+        );
+    }
+    return null;
 }
 
 /**
@@ -129,7 +191,8 @@ interface AgentMessage {
  *
  * 数据来自 /api/v1/my/exams/:id：题面、样例与初始代码由后端下发
  * （隐藏测试不会下发）；提交后在后台异步判题。
- * Agent 对话与终端为本地演示。
+ * Coding Agent 已接入 /api/v1/agent/：按考试级别只读或可写，
+ * SSE 流式展示回复、工具调用与代码修改。
  */
 export function WorkbenchPage() {
     const { examId } = useParams<{ examId: string }>();
@@ -187,6 +250,8 @@ export function WorkbenchPage() {
         ...(savedDraft ? savedDraft.languages : {}),
     }));
     const [edited, setEdited] = useState(false);
+    // AI 改动工作区后重建编辑器 model，让 Monaco 显示服务端内容
+    const [editorEpoch, setEditorEpoch] = useState(0);
     const [savedClock, setSavedClock] = useState<string | null>(null);
 
     // 题目加载后初始化每道题的代码内容（本地草稿优先，其次初始代码）
@@ -249,30 +314,32 @@ export function WorkbenchPage() {
     const [termTab, setTermTab] = useState<"test" | "output" | "problem">("test");
     const [termCleared, setTermCleared] = useState(false);
 
-    // Agent 对话：本地演示（服务随后续迭代接入）
-    const [messages, setMessages] = useState<AgentMessage[]>([
-        {
-            id: "agent-intro",
-            role: "agent",
-            time: formatClock(new Date()),
-            paragraphs: [
-                "你好，我是本场考试的 Coding Agent（演示）。",
-                "Agent 服务将在下一迭代接入；当前的回复为本地演示，不会修改你的代码。",
-            ],
-        },
-    ]);
-    const [draft, setDraft] = useState("");
-    const messageSeed = useRef(0);
+    // AI 助教：级别 / 会话 / 消息 / 修改记录（接口见 api/agent.ts）
+    const [agentCaps, setAgentCaps] = useState<AgentCapabilities | null>(null);
+    const [agentSession, setAgentSession] = useState<AgentSessionInfo | null>(null);
+    const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
+    const [agentChanges, setAgentChanges] = useState<AgentChangeRecord[]>([]);
+    const [agentDisabledReason, setAgentDisabledReason] = useState("");
+    const [agentError, setAgentError] = useState<string | null>(null);
+    const [agentLoading, setAgentLoading] = useState(false);
+    const [agentStreaming, setAgentStreaming] = useState(false);
+    const [agentStream, setAgentStream] = useState<{ text: string; tools: AgentToolView[] } | null>(null);
+    const [agentUsage, setAgentUsage] = useState<{ input: number; output: number } | null>(null);
+    // path -> 服务端工作区版本号；发送消息时带上，后端据此决定是否用编辑器内容覆盖
+    const [agentRevisions, setAgentRevisions] = useState<Record<string, number>>({});
+    const [agentDraft, setAgentDraft] = useState("");
+    const [agentTab, setAgentTab] = useState<"chat" | "changes">("chat");
+    const agentAbortRef = useRef<AbortController | null>(null);
 
     const chatRef = useRef<HTMLDivElement>(null);
 
-    // 追加消息后滚动到会话底部
+    // 追加消息 / 流式输出时滚动到会话底部
     useEffect(() => {
         const chat = chatRef.current;
         if (chat) {
             chat.scrollTop = chat.scrollHeight;
         }
-    }, [messages.length]);
+    }, [agentMessages.length, agentStream?.text, agentStreaming]);
 
     /** 当前题目的提交次数 */
     const mySubmissions = useMemo(
@@ -291,25 +358,270 @@ export function WorkbenchPage() {
         setEdited(true);
     };
 
-    /** 发送 Agent 消息：追加用户气泡与一条模拟回复（本地状态） */
-    const handleSend = () => {
-        const text = draft.trim();
-        if (!text) {
+    /** 把服务端工作区覆盖到编辑器（三级模式下 AI 已写入的内容） */
+    const applyWorkspaceFiles = (files: AgentWorkspaceFile[]) => {
+        if (!files.length) {
             return;
         }
-        const seed = ++messageSeed.current;
-        const time = formatClock(new Date());
-        setMessages(current => [
-            ...current,
-            { id: "local-user-" + seed, role: "user", text },
-            {
-                id: "local-agent-" + seed,
-                role: "agent",
-                time,
-                paragraphs: [CannedReplies[seed % CannedReplies.length]],
-            },
-        ]);
-        setDraft("");
+        const changed = files.some(file => contents[file.path] !== file.content);
+        if (changed) {
+            setContents(current => {
+                const next = { ...current };
+                files.forEach(file => {
+                    next[file.path] = file.content;
+                });
+                return next;
+            });
+            setModified(current => {
+                const next = { ...current };
+                files.forEach(file => {
+                    next[file.path] = false;
+                });
+                return next;
+            });
+            setEditorEpoch(value => value + 1);
+        }
+        setAgentRevisions(current => {
+            const next = { ...current };
+            files.forEach(file => {
+                next[file.path] = file.revision;
+            });
+            return next;
+        });
+    };
+
+    const refreshWorkspace = () => {
+        if (!detail || !problem) {
+            return Promise.resolve();
+        }
+        return fetchAgentWorkspace(detail.id, problem.problemId)
+            .then(result => applyWorkspaceFiles(result.files))
+            .catch(() => {
+                // 工作区刷新失败不影响对话继续
+            });
+    };
+
+    /** 加载当前题目的 AI 能力、会话与历史 */
+    const loadAgent = () => {
+        if (!detail || !problem) {
+            return;
+        }
+        const examIdValue = detail.id;
+        const problemIdValue = problem.problemId;
+        setAgentLoading(true);
+        setAgentError(null);
+        setAgentDisabledReason("");
+        fetchAgentCapabilities(examIdValue, problemIdValue)
+            .then(caps => {
+                setAgentCaps(caps);
+                return createAgentSession(examIdValue, problemIdValue).then(session => {
+                    setAgentSession(session);
+                    return Promise.all([
+                        fetchAgentMessages(session.sessionId),
+                        fetchAgentChanges(session.sessionId),
+                        fetchAgentWorkspace(examIdValue, problemIdValue),
+                    ]).then(([history, changes, workspace]) => {
+                        setAgentMessages(history.messages);
+                        setAgentChanges(changes.changes);
+                        setAgentRevisions(current => {
+                            const next = { ...current };
+                            workspace.files.forEach(file => {
+                                next[file.path] = file.revision;
+                            });
+                            return next;
+                        });
+                        if (caps.canEditCode) {
+                            applyWorkspaceFiles(workspace.files);
+                        }
+                    });
+                });
+            })
+            .catch((e: ApiError) => {
+                setAgentCaps(null);
+                setAgentSession(null);
+                if (e.status === 403) {
+                    setAgentDisabledReason(e.message || "本场考试未开启 AI");
+                } else {
+                    setAgentError(e.message);
+                }
+            })
+            .finally(() => setAgentLoading(false));
+    };
+
+    // 切换题目时重新加载该题的会话；离开页面时取消进行中的流
+    useEffect(() => {
+        agentAbortRef.current?.abort();
+        setAgentCaps(null);
+        setAgentSession(null);
+        setAgentMessages([]);
+        setAgentChanges([]);
+        setAgentStream(null);
+        setAgentStreaming(false);
+        setAgentError(null);
+        setAgentDisabledReason("");
+        setAgentTab("chat");
+        setAgentRevisions({});
+        if (detail && problem) {
+            loadAgent();
+        }
+        return () => {
+            agentAbortRef.current?.abort();
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detail?.id, problem?.problemId]);
+
+    /** 发送 Agent 消息：消费 SSE 流并同步回复、工具调用与代码修改 */
+    const handleSend = () => {
+        const text = agentDraft.trim();
+        if (!text || !agentSession || !agentCaps || !agentCaps.ready || agentStreaming) {
+            return;
+        }
+        const controller = new AbortController();
+        agentAbortRef.current = controller;
+        const sessionIdValue = agentSession.sessionId;
+        setAgentStreaming(true);
+        setAgentError(null);
+        setAgentTab("chat");
+        setAgentDraft("");
+        setAgentMessages(current => [...current, {
+            seq: -Date.now(),
+            role: "user",
+            content: text,
+            inputTokens: 0,
+            outputTokens: 0,
+            created: new Date().toISOString(),
+        }]);
+        setAgentStream({ text: "", tools: [] });
+
+        const handleEvent = (event: AgentStreamEvent) => {
+            switch (event.type) {
+                case "delta":
+                    setAgentStream(current => current
+                        ? { ...current, text: current.text + event.text }
+                        : { text: event.text, tools: [] });
+                    break;
+                case "tool_call":
+                    setAgentStream(current => current ? {
+                        ...current,
+                        tools: [...current.tools, {
+                            callId: event.callId,
+                            name: event.name,
+                            arguments: event.arguments,
+                        }],
+                    } : current);
+                    break;
+                case "tool_result":
+                    setAgentStream(current => current ? {
+                        ...current,
+                        tools: current.tools.map(tool => tool.callId === event.callId
+                            ? { ...tool, ok: event.ok, result: event.result }
+                            : tool),
+                    } : current);
+                    break;
+                case "change":
+                    setAgentChanges(current => [{
+                        changeId: event.changeId,
+                        path: event.path,
+                        revisionBefore: Math.max(0, event.revisionAfter - 1),
+                        revisionAfter: event.revisionAfter,
+                        diff: event.diff,
+                        status: "applied",
+                        created: new Date().toISOString(),
+                        revertedAt: null,
+                    }, ...current.filter(item => item.changeId !== event.changeId)]);
+                    if (agentCaps.canEditCode) {
+                        refreshWorkspace();
+                    }
+                    break;
+                case "usage":
+                    setAgentUsage({ input: event.inputTokens, output: event.outputTokens });
+                    setAgentCaps(current => {
+                        if (!current) {
+                            return current;
+                        }
+                        const used = current.quota.used + event.inputTokens + event.outputTokens;
+                        return {
+                            ...current,
+                            quota: {
+                                ...current.quota,
+                                used,
+                                remaining: current.quota.limit
+                                    ? Math.max(0, current.quota.limit - used)
+                                    : null,
+                            },
+                        };
+                    });
+                    break;
+                case "error":
+                    setAgentError(event.message);
+                    break;
+                default:
+                    break;
+            }
+        };
+
+        streamAgentMessage(sessionIdValue, {
+            content: text,
+            activeFile: currentPath,
+            code: currentCode,
+            workspaceRevision: currentPath ? agentRevisions[currentPath] : undefined,
+            clientMessageId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        }, handleEvent, controller.signal)
+            .then(() => {
+                if (controller.signal.aborted) {
+                    return;
+                }
+                return fetchAgentMessages(sessionIdValue).then(result => {
+                    if (!controller.signal.aborted) {
+                        setAgentMessages(result.messages);
+                    }
+                });
+            })
+            .then(() => {
+                if (controller.signal.aborted) {
+                    return;
+                }
+                return Promise.all([
+                    refreshWorkspace(),
+                    fetchAgentChanges(sessionIdValue).then(result => {
+                        if (!controller.signal.aborted) {
+                            setAgentChanges(result.changes);
+                        }
+                    }),
+                ]);
+            })
+            .catch((e: ApiError) => {
+                if (!controller.signal.aborted) {
+                    setAgentError(e.message);
+                }
+            })
+            .finally(() => {
+                if (agentAbortRef.current === controller) {
+                    setAgentStreaming(false);
+                    setAgentStream(null);
+                }
+            });
+    };
+
+    /** 撤销一次 AI 修改并同步编辑器 */
+    const handleRevert = (change: AgentChangeRecord) => {
+        if (change.status !== "applied") {
+            return;
+        }
+        revertAgentChange(change.changeId)
+            .then(result => {
+                setContents(current => ({ ...current, [result.path]: result.content }));
+                setModified(current => ({ ...current, [result.path]: false }));
+                setAgentRevisions(current => ({ ...current, [result.path]: result.revision }));
+                setEditorEpoch(value => value + 1);
+                toast("已撤销这次 AI 修改", "success");
+                if (agentSession) {
+                    return fetchAgentChanges(agentSession.sessionId)
+                        .then(response => setAgentChanges(response.changes));
+                }
+                return undefined;
+            })
+            .catch((e: ApiError) => toast(e.message, "warning"));
     };
 
     /** 提交答卷：入队异步判题，结果在结果页轮询 */
@@ -667,7 +979,8 @@ export function WorkbenchPage() {
                             </div>
                             <div className="editor-body">
                                 {currentPath ? (
-                                    <CodeEditor path={currentPath}
+                                    <CodeEditor key={"editor-" + editorEpoch}
+                                                path={currentPath}
                                                 initialValue={currentCode}
                                                 language={currentLanguage}
                                                 onChange={handleCodeChange}/>
@@ -729,16 +1042,40 @@ export function WorkbenchPage() {
                                 </div>
                                 <div>
                                     <div className="agent-name">Coding Agent</div>
-                                    <div className="agent-sub">演示 · 服务下一迭代接入</div>
+                                    <div className="agent-sub">
+                                        {agentCaps
+                                            ? `${agentCaps.levelLabel} · ${agentCaps.model}${agentCaps.mock ? " · 本地模拟" : ""}`
+                                            : agentDisabledReason || (agentLoading ? "正在加载…" : "未接入")}
+                                    </div>
                                 </div>
                             </div>
                             <div className="agent-head-actions">
+                                {agentCaps && (
+                                    <span className="mode-chip">
+                                        <Icon name="lock" size={10} strokeWidth={2}/>
+                                        {agentCaps.canEditCode ? "可改代码" : "仅思路"}
+                                    </span>
+                                )}
                                 <span className="mode-chip">
                                     <Icon name="lock" size={10} strokeWidth={2}/>
                                     {AiModeLabels[detail.aiMode] || detail.aiMode}
                                 </span>
                             </div>
                         </div>
+
+                        {agentCaps && (
+                            <div className="agent-tabs">
+                                <span className={"agent-tab" + (agentTab === "chat" ? " active" : "")}
+                                      onClick={() => setAgentTab("chat")}>对话</span>
+                                <span className={"agent-tab" + (agentTab === "changes" ? " active" : "")}
+                                      onClick={() => setAgentTab("changes")}>
+                                    修改{agentChanges.length > 0 ? ` ${agentChanges.length}` : ""}
+                                </span>
+                                <span className="agent-tab-hint">
+                                    {agentCaps.canEditCode ? "AI 可以直接修改工作区" : "AI 仅给思路（代码会被过滤）"}
+                                </span>
+                            </div>
+                        )}
 
                         <div className="context-bar">
                             <span className="ctx-label">上下文</span>
@@ -748,33 +1085,99 @@ export function WorkbenchPage() {
                             </span>
                         </div>
 
-                        <div className="chat" ref={chatRef}>
-                            {messages.map(message => message.role === "user" ? (
-                                <div className="msg-user" key={message.id}>
-                                    <div className="bubble">{message.text}</div>
-                                </div>
-                            ) : (
-                                <div className="msg-agent" key={message.id}>
-                                    <div className="agent-meta">
-                                        <span className="name">Coding Agent</span>
-                                        <span className="time">{message.time}</span>
+                        {agentTab === "chat" ? (
+                            <div className="chat" ref={chatRef}>
+                                {agentLoading && <div className="agent-notice">正在加载 AI 会话…</div>}
+                                {!agentLoading && agentDisabledReason && (
+                                    <div className="agent-notice">{agentDisabledReason}</div>
+                                )}
+                                {agentError && <div className="agent-notice error">{agentError}</div>}
+                                {agentCaps && !agentCaps.ready && (
+                                    <div className="agent-notice">
+                                        模型尚未配置（缺少 API Key），当前只能查看历史记录。
                                     </div>
-                                    <div className="agent-card">
-                                        {(message.paragraphs || []).map((paragraph, index) => (
-                                            <p key={index}>{renderInlineCode(paragraph)}</p>
+                                )}
+                                {agentMessages.map(renderAgentMessage)}
+                                {agentStream && (
+                                    <div className="msg-agent">
+                                        <div className="agent-meta">
+                                            <span className="name">Coding Agent</span>
+                                            <span className="time">生成中…</span>
+                                        </div>
+                                        {agentStream.text && (
+                                            <div className="agent-card">{renderAgentText(agentStream.text)}</div>
+                                        )}
+                                        {agentStream.tools.map(tool => (
+                                            <div className="agent-tool" key={tool.callId}>
+                                                <span className="agent-tool-name">
+                                                    工具 · {tool.name}
+                                                    {tool.ok === false ? " · 失败" : tool.ok ? " · 完成" : " · 运行中"}
+                                                </span>
+                                                <span className="agent-tool-result">
+                                                    {(tool.result || JSON.stringify(tool.arguments)).slice(0, 160)}
+                                                </span>
+                                            </div>
                                         ))}
+                                        {!agentStream.text && agentStream.tools.length === 0 && (
+                                            <div className="agent-card">
+                                                <div className="agent-text muted">思考中…</div>
+                                            </div>
+                                        )}
                                     </div>
-                                </div>
-                            ))}
-                        </div>
+                                )}
+                                {!agentLoading && !agentDisabledReason && !agentError && agentCaps
+                                    && agentMessages.length === 0 && !agentStream && (
+                                        <div className="agent-notice">
+                                            可以问我题目思路、帮你看代码或分析 bug。
+                                            {agentCaps.canEditCode
+                                                ? "当前级别允许我直接修改工作区。"
+                                                : "当前级别我只给思路和调试方向，不提供完整代码，也不会改动工作区。"}
+                                        </div>
+                                    )}
+                            </div>
+                        ) : (
+                            <div className="chat">
+                                {agentChanges.length === 0 && (
+                                    <div className="agent-notice">还没有 AI 代码修改记录。</div>
+                                )}
+                                {agentChanges.map(change => (
+                                    <div className="agent-change" key={change.changeId}>
+                                        <div className="agent-change-head">
+                                            <span className={"badge " + (change.status === "applied" ? "green" : "gray")}>
+                                                {change.status === "applied" ? "已应用" : "已撤销"}
+                                            </span>
+                                            <span className="agent-change-path">{change.path}</span>
+                                            <span className="muted" style={{ fontSize: 10 }}>
+                                                v{change.revisionBefore} → v{change.revisionAfter}
+                                            </span>
+                                        </div>
+                                        <pre className="agent-diff">{change.diff || "（无差异）"}</pre>
+                                        {change.status === "applied" && (
+                                            <span className="link"
+                                                  style={{ fontSize: 10.5 }}
+                                                  onClick={() => handleRevert(change)}>
+                                                撤销这次修改
+                                            </span>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
 
                         <div className="agent-input-wrap">
                             <div className="agent-input">
                                 <textarea style={AgentInputStyle}
-                                          value={draft}
-                                          placeholder={AgentPlaceholder}
+                                          value={agentDraft}
+                                          disabled={agentStreaming || !agentCaps?.ready}
+                                          placeholder={
+                                              agentDisabledReason ? "本场考试未开启 AI"
+                                                  : !agentCaps ? (agentLoading ? "正在加载 AI…" : "AI 暂不可用")
+                                                      : !agentCaps.ready ? "AI 暂不可用：未配置模型密钥"
+                                                          : agentCaps.canEditCode ? "描述问题，AI 可以直接修改代码…"
+                                                              : "描述问题，AI 会给出思路（不提供完整代码）…"
+                                          }
                                           spellCheck={false}
-                                          onChange={event => setDraft(event.target.value)}
+                                          onChange={event => setAgentDraft(event.target.value)}
                                           onKeyDown={event => {
                                               if (event.key === "Enter" && !event.shiftKey) {
                                                   event.preventDefault();
@@ -783,11 +1186,32 @@ export function WorkbenchPage() {
                                           }}/>
                                 <div className="input-toolbar">
                                     <div className="input-tools">
-                                        <span className="input-hint">Enter 发送 · Shift+Enter 换行</span>
+                                        <span className="input-hint">
+                                            {agentStreaming
+                                                ? "正在生成，可点击右侧停止"
+                                                : "Enter 发送 · Shift+Enter 换行"}
+                                        </span>
+                                        {agentCaps && (
+                                            <span className="input-hint">
+                                                {agentUsage
+                                                    ? `本次 ${agentUsage.input + agentUsage.output}`
+                                                    : `累计 ${agentCaps.quota.used}`} tokens
+                                            </span>
+                                        )}
                                     </div>
-                                    <button className="send-btn" type="button" onClick={handleSend}>
-                                        <Icon name="send" size={14} strokeWidth={1.9}/>
-                                    </button>
+                                    {agentStreaming ? (
+                                        <button className="send-btn" type="button"
+                                                title="停止生成"
+                                                onClick={() => agentAbortRef.current?.abort()}>
+                                            停止
+                                        </button>
+                                    ) : (
+                                        <button className="send-btn" type="button"
+                                                disabled={!agentCaps?.ready || !agentDraft.trim()}
+                                                onClick={handleSend}>
+                                            <Icon name="send" size={14} strokeWidth={1.9}/>
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                             <div className="agent-foot">

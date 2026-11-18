@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Redirect, Route, RouteProps, Switch, useLocation } from "react-router-dom";
-import { Store, userSlice } from "./store";
+import { Store, tokenSlice, userSlice } from "./store";
 import { fetchUser, isAuthenticated } from "./api/client";
 import { Routes } from "./api/urls";
 import { Role, roleHome } from "./roles";
@@ -71,6 +71,11 @@ export function App() {
                     }
                     if (result.success) {
                         dispatch(userSlice.actions.updateUserStatus(result.user));
+                    } else if (!result.authorized) {
+                        // 令牌失效（过期 / 用户已不存在）：清掉本地令牌，回到登录页，
+                        // 避免每次刷新都拿旧 token 请求并 401
+                        dispatch(tokenSlice.actions.setToken(null));
+                        dispatch(userSlice.actions.updateUserStatus(null));
                     }
                     setBooting(false);
                 })
