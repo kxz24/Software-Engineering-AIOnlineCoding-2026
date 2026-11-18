@@ -18,10 +18,13 @@ cd backend
 #建议使用conda
 pip install -r requirements.txt
 
-python manage.py makemigrations user problem exam   # 迁移文件被 .gitignore 忽略，需各自本地生成
+python manage.py makemigrations user problem exam agent   # 迁移文件被 .gitignore 忽略，需各自本地生成
 python manage.py migrate
 python manage.py runserver 127.0.0.1:8000
 ```
+
+AI 助教需要模型配置：`cp .env.example .env` 后填写 `DEEPSEEK_API_KEY` 等变量
+（`.env` 不入库；不填时使用本地 mock provider，不影响其他功能）。
 
 接口前缀 `/api/v1`，开发时前端由 CRA 的 proxy 转发到本服务。
 
@@ -41,6 +44,7 @@ python manage.py shell -c "from user.models import User; from utils.jwt import e
 ├── user/          用户与账号：注册 / 登录、账号 CRUD、CSV 导入、审计日志
 ├── problem/       题库：题目与测试样例 CRUD
 ├── exam/          考场：考试管理（创建 / 组卷 / 名单 / 发布 / 撤回 / 归档）与学生作答闭环
+├── agent/         AI 助教：分级会话、SSE 对话、工具调用与用量记录
 ├── utils/         jwt.py（令牌 + login_required / role_required 装饰器）
 ├── nginx/         生产环境反向代理配置
 ├── docker-compose.yml / Dockerfile / Makefile
@@ -75,6 +79,14 @@ python manage.py shell -c "from user.models import User; from utils.jwt import e
 | `/api/v1/my/exams/:id/submissions` | GET | 学生 | 我在本场考试的提交记录 |
 | `/api/v1/my/exams/:id/problems/:pid/submissions` | GET / POST | 学生 | 某题提交历史（含代码）/ 提交答卷（发布时段内、按题限次，异步判题） |
 | `/api/v1/submissions/:id` | GET | 本人 / 教师 / 管理员 | 单条提交详情、得分与用例判定（隐藏用例不返回输入/期望/输出） |
+| `/api/v1/agent/capabilities` | GET | 学生 | 本场考试的 AI 级别、可用工具与剩余额度（`closed` 返回 403） |
+| `/api/v1/agent/sessions` | POST | 学生 | 创建或取回某题会话（每场考试每题一个） |
+| `/api/v1/agent/sessions/:id/messages` | GET / POST | 学生 | 对话历史 / 发消息（SSE：delta、tool_call、change、usage、done） |
+| `/api/v1/agent/sessions/:id/changes` | GET | 学生 / 教师 | 本题 AI 修改记录（含 diff） |
+| `/api/v1/agent/changes/:id/revert` | POST | 学生 | 撤销一次 AI 修改 |
+| `/api/v1/agent/workspace` | GET / PUT | 学生 | 三级模式的工作区读写（`expectedRevision` 乐观锁） |
+| `/api/v1/exams/:id/agent/summary` | GET | 教师 / 管理员 | 按学生汇总 AI token 用量与修改次数 |
+| `/api/v1/agent/sessions/:id/transcript` | GET | 本人 / 教师 | 单条会话的完整转录、工具调用与修改记录 |
 
 另有 `/api/schema/swagger-ui/` 与 `/api/schema/redoc/` 在线接口文档（Django 后台登录后可看）。
 
@@ -149,7 +161,7 @@ python manage.py judge_requeue
 ## 测试
 
 ```bash
-python manage.py test user problem exam judge   # 含判题纯函数、任务状态机、权限与隐藏数据测试
+python manage.py test user problem exam judge agent   # 含判题与 AI 助教的分级、SSE、工具权限测试
 python manage.py test judge                     # 仅判题相关
 manage.py check
 ```
@@ -181,7 +193,7 @@ docker compose up -d --build
 ## 约定
 
 - 迁移文件（`**/migrations/*.py`）与 `db.sqlite3` 被 .gitignore 忽略（课程模板约定），
-  拉取代码后先 `makemigrations user problem exam` 再 `migrate`。
+  拉取代码后先 `makemigrations user problem exam agent` 再 `migrate`。
 - 接口返回 JSON 的键用 camelCase（`userId`、`sampleCount`、`isSample`…），
   与前端 TypeScript 类型一一对应。
 - 新增接口时：先在应用 `controllers.py` 写业务函数，`views.py` 只做校验与响应组装，

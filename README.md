@@ -20,7 +20,7 @@
 .
 ├── frontend/   前端：TypeScript + React
 ├── backend/    后端：Python
-├── agent/      AI 助教 Agent：LangChain
+├── agent/      AI 助教设计说明（后端实现见 backend/agent/）
 └── docs/       文档与原型
     ├── requirements/  需求规格说明书（SRS）源码与用户故事地图
     └── prototype/     墨刀高保真原型（HTML 源文件与预览图）
@@ -32,7 +32,7 @@
 | ---------- | ---------------------------- |
 | 前端       | TypeScript、React            |
 | 后端       | Python                       |
-| AI Agent   | LangChain                    |
+| AI Agent   | DeepSeek（OpenAI 兼容）+ Django |
 | 代码编辑   | Monaco Editor                |
 | 判题       | Celery + Redis + Docker 沙箱 |
 | 运行时隔离 | 容器化评测环境               |
