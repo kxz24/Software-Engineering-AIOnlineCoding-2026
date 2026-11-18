@@ -45,6 +45,12 @@ services:
     environment:
       - DJANGO_SETTINGS_MODULE=app.settings_prod
       - CELERY_BROKER_URL=redis://redis:6379/0
+      # AI 助教：默认 mock；在 backend/.env 填写真实配置后由 compose 注入
+      # （.env 与镜像构建上下文均已排除，不会打进镜像）
+      - AGENT_PROVIDER=${AGENT_PROVIDER:-mock}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - AGENT_MODEL=${AGENT_MODEL:-deepseek-chat}
     # 等 MySQL 健康检查通过（数据库完成初始化）之后再启动，避免连接被拒绝
     depends_on:
       mysql:
@@ -56,9 +62,9 @@ services:
     # 因此必须先 makemigrations 才能建表
     command: >
       bash -c "export DJANGO_SETTINGS_MODULE=app.settings_prod &&
-      python manage.py makemigrations app user problem exam &&
+      python manage.py makemigrations app user problem exam agent &&
       python manage.py migrate &&
-      exec gunicorn -w4 -b 0.0.0.0:8000 --log-level=debug app.wsgi"
+      exec gunicorn -w4 -b 0.0.0.0:8000 --timeout 300 --log-level=debug app.wsgi"
     expose:
       - "8000"
     networks:

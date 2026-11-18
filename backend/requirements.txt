@@ -23,8 +23,14 @@ redis==5.0.1
 docker==7.0.0
 # docker SDK 7.0.0 的 unix/npipe adapter 与 requests>=2.32 的 scheme 校验不兼容
 requests==2.31.0
-# Windows 本地开发：Docker SDK 通过 npipe 连接 Docker Desktop 需要
-pywin32==306; sys_platform == "win32"
+# Windows 本地开发：Docker SDK 通过 npipe 连接 Docker Desktop 需要。
+# pywin32 306 没有 Python 3.13 的 wheel（PyPI 从 307 起才提供 cp313），
+# 因此按解释器版本分别固定，避免 3.13 下安装直接失败。
+pywin32==306; sys_platform == "win32" and python_version < "3.13"
+pywin32>=307; sys_platform == "win32" and python_version >= "3.13"
+
+# AI 助教：以 OpenAI 兼容协议调用 DeepSeek（流式对话 + 工具调用）
+httpx==0.28.1
 
 # 部署
 gunicorn==20.1.0
