@@ -40,6 +40,8 @@ class Exam(models.Model):
     duration_minutes = models.PositiveIntegerField(default=120)
     submit_limit = models.PositiveIntegerField(default=2)
     ai_mode = models.CharField(max_length=16, choices=AI_MODE_CHOICES, default=AI_LIMITED)
+    # 每生本场考试的 AI token 上限（输入 + 输出），0 表示不限
+    agent_token_quota = models.PositiveIntegerField(default=0, verbose_name="每生 AI token 上限")
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     candidates = models.ManyToManyField(User, through="ExamCandidate", related_name="exams")
     problems = models.ManyToManyField(Problem, through="ExamProblem", related_name="exams")

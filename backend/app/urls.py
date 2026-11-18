@@ -25,6 +25,7 @@ urlpatterns = [
     path(r"", include("problem.urls")),
     path(r"", include("exam.urls")),
     path(r"", include("judge.urls")),
+    path(r"", include("agent.urls")),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/schema/swagger-ui/', login_required(SpectacularSwaggerView.as_view(
         url_name='schema')), name='swagger-ui'),  # swagger接口文档

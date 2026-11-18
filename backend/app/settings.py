@@ -16,6 +16,27 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _load_dotenv(path):
+    """读取 backend/.env（不入库），已存在的环境变量优先。"""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_dotenv(BASE_DIR / ".env")
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
@@ -52,6 +73,7 @@ INSTALLED_APPS = [
     "problem",
     "exam",
     "judge",
+    "agent",
     "rest_framework",
     "drf_spectacular",
     'drf_spectacular_sidecar',
@@ -186,3 +208,21 @@ JUDGE_IMAGE = os.environ.get("JUDGE_IMAGE", "aicoding-judge:latest")
 JUDGE_ENQUEUE_ENABLED = os.environ.get("JUDGE_ENQUEUE_ENABLED", "1") == "1"
 # 单次判题的整体墙钟上限（秒），需小于 CELERY_TASK_TIME_LIMIT
 JUDGE_WALL_TIME_LIMIT = int(os.environ.get("JUDGE_WALL_TIME_LIMIT", "110"))
+
+# ---------------------------------------------------------------------------
+# AI 助教（DeepSeek / 本地模拟）
+# ---------------------------------------------------------------------------
+# provider: mock（默认，未配置密钥时用于本地联调）或 deepseek
+AGENT_PROVIDER = os.environ.get("AGENT_PROVIDER", "mock")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+AGENT_MODEL = os.environ.get("AGENT_MODEL", "deepseek-chat")
+# 单次回复的最大输出 token 与工具轮次上限
+AGENT_MAX_OUTPUT_TOKENS = int(os.environ.get("AGENT_MAX_OUTPUT_TOKENS", "1024"))
+AGENT_MAX_TOOL_ROUNDS = int(os.environ.get("AGENT_MAX_TOOL_ROUNDS", "6"))
+# 发给模型的历史消息条数上限（不含系统提示）
+AGENT_HISTORY_MESSAGES = int(os.environ.get("AGENT_HISTORY_MESSAGES", "40"))
+# 模型请求超时（秒）
+AGENT_REQUEST_TIMEOUT = int(os.environ.get("AGENT_REQUEST_TIMEOUT", "120"))
+# 提示词版本，写入 AgentSession.prompt_version
+AGENT_PROMPT_VERSION = os.environ.get("AGENT_PROMPT_VERSION", "v1")
