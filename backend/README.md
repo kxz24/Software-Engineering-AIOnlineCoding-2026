@@ -139,13 +139,20 @@ POST 提交 → status=pending → judge_submission.delay(id)
 ### 本地启动判题
 
 ```bash
-# 1) Redis（或已有本地 Redis）
-docker run -d --name aicoding-redis -p 6379:6379 redis:7-alpine
+# 1) Redis：只绑定本机回环地址，并设置访问密码
+#    严禁使用 -p 6379:6379（会暴露到 0.0.0.0，构成 Redis 未授权访问）
+docker run -d --name aicoding-redis \
+  -p 127.0.0.1:6379:6379 \
+  -e REDIS_PASSWORD='请替换为强密码' \
+  redis:7-alpine \
+  sh -c 'exec redis-server --requirepass "$REDIS_PASSWORD"'
 
 # 2) 判题镜像（在仓库根目录）
 docker build -t aicoding-judge:latest -f backend/judge/Dockerfile backend/judge
 
 # 3) worker（Windows 必须用 solo 池）
+#    启动前设置带密码的 broker 地址：
+#    PowerShell: $env:CELERY_BROKER_URL="redis://:请替换为强密码@127.0.0.1:6379/0"
 cd backend
 celery -A app worker --pool=solo -l info
 
@@ -155,6 +162,11 @@ python manage.py judge_once <submission_id> --force
 # 5) Redis 故障或 worker 中断后的兜底
 python manage.py judge_requeue
 ```
+
+> **Redis 安全要求**：本地开发也必须只监听 `127.0.0.1` 并设置 `requirepass`；
+> 生产 compose 中的 `redis` 仅存在于内部网络，不要为它添加 `ports` 映射。
+> 验证：`docker exec aicoding-redis redis-cli ping` 应返回 `NOAUTH`，
+> `docker exec aicoding-redis redis-cli -a '<密码>' ping` 应返回 `PONG`。
 
 `CELERY_BROKER_URL`、`JUDGE_IMAGE`、`JUDGE_ENQUEUE_ENABLED` 等配置见 `app/settings.py` 的「判题服务」一节。
 
