@@ -155,7 +155,7 @@
     font-size: 10px; display: inline-flex; align-items: center; justify-content: center;
   }
   .wb-root .tabs-right { margin-left: auto; height: 40px; display: flex; align-items: center; font-size: 11px; color: #a8b3c2; }
-  .wb-root .problem-body { padding: 12px 18px; overflow: hidden; }
+  .wb-root .problem-body { padding: 12px 18px; flex: 1; min-height: 0; overflow-y: auto; }
   .wb-root .problem-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .wb-root .problem-title { font-size: 15px; font-weight: 700; color: #0f172a; }
   .wb-root .badges { display: flex; gap: 6px; flex-shrink: 0; }
@@ -236,29 +236,6 @@
   .wb-root .str { color: #059669; }
   .wb-root .cm { color: #94a3b8; font-style: italic; }
   .wb-root .dec { color: #c026d3; }
-
-/* 终端 */
-  .wb-root .terminal { height: 184px; background: #ffffff; display: flex; flex-direction: column; flex-shrink: 0; }
-  .wb-root .terminal-head {
-    height: 36px; display: flex; align-items: center; gap: 18px;
-    padding: 0 16px; border-bottom: 1px solid #eef2f7; flex-shrink: 0;
-  }
-  .wb-root .terminal-title { font-size: 11.5px; font-weight: 600; color: #334155; display: flex; align-items: center; gap: 6px; }
-  .wb-root .terminal-tab { font-size: 11px; color: #64748b; }
-  .wb-root .terminal-tab.active { color: #1d4ed8; font-weight: 600; }
-  .wb-root .terminal-clear { margin-left: auto; }
-  .wb-root .terminal-body {
-    flex: 1; padding: 8px 16px 6px;
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-    font-size: 11px; line-height: 17px;
-    background: #fbfcfe; overflow: hidden;
-  }
-  .wb-root .term-line { white-space: pre; }
-  .wb-root .term-prompt { color: #2563eb; font-weight: 600; }
-  .wb-root .term-ok { color: #047857; }
-  .wb-root .term-fail { color: #b91c1c; }
-  .wb-root .term-muted { color: #64748b; }
-  .wb-root .term-dim { color: #94a3b8; }
 
 /* ---------- 右侧 Agent ---------- */
   .wb-root .agent {

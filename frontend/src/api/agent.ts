@@ -95,7 +95,9 @@ async function request<T>(path: string, options: {
 } = {}): Promise<T> {
     let response: Response;
     try {
-        response = await fetch(AgentBase + path, {
+        // 以 /api 开头的绝对路径（教师端按考试查询）不拼接前缀
+        const url = path.startsWith("/api") ? path : AgentBase + path;
+        response = await fetch(url, {
             method: options.method || "GET",
             headers: {
                 "Content-Type": "application/json",
@@ -143,6 +145,74 @@ export function revertAgentChange(
     changeId: number
 ): Promise<{ path: string; revision: number; content: string }> {
     return request(`/changes/${changeId}/revert`, { method: "POST", body: {} });
+}
+
+export interface AgentSessionListItem {
+    sessionId: number;
+    student: string;
+    nickname: string;
+    problemId: number;
+    problemTitle: string;
+    level: AgentLevel;
+    levelLabel: string;
+    provider: string;
+    model: string;
+    status: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheHitTokens: number;
+    messageCount: number;
+    changeCount: number;
+    created: string | null;
+    lastActiveAt: string | null;
+}
+
+export interface AgentToolCallRecord {
+    callId: string;
+    name: string;
+    arguments: Record<string, unknown>;
+    ok: boolean;
+    resultExcerpt: string;
+    durationMs: number;
+    created: string | null;
+}
+
+export interface AgentTranscript {
+    session: {
+        id: number;
+        examId: number;
+        problemId: number;
+        problemTitle: string;
+        student: string;
+        level: AgentLevel;
+        levelLabel: string;
+        provider: string;
+        model: string;
+        promptVersion: string;
+        status: string;
+        inputTokens: number;
+        outputTokens: number;
+        cacheHitTokens: number;
+        cacheMissTokens: number;
+        created: string | null;
+        lastActiveAt: string | null;
+        endedAt: string | null;
+    };
+    messages: AgentChatMessage[];
+    toolCalls: AgentToolCallRecord[];
+    changes: AgentChangeRecord[];
+}
+
+/** 教师端：本场考试的全部 AI 会话（用量 + 消息数 + 修改次数） */
+export function fetchAgentExamSessions(
+    examId: number
+): Promise<{ sessions: AgentSessionListItem[] }> {
+    return request(`/api/v1/exams/${examId}/agent/sessions`);
+}
+
+/** 教师端：单条会话的完整转录（对话 + 工具调用 + 代码修改） */
+export function fetchAgentTranscript(sessionId: number): Promise<AgentTranscript> {
+    return request(`/sessions/${sessionId}/transcript`);
 }
 
 export function fetchAgentWorkspace(

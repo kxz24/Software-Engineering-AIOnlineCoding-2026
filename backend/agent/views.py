@@ -464,6 +464,19 @@ class AgentChangeRevertView(APIView):
 # ---------------------------------------------------------------------------
 # 教师端
 # ---------------------------------------------------------------------------
+class AgentExamSessionsView(APIView):
+    """本场考试的全部 AI 会话（教师 / 管理员），用于查看每人用量并进入转录。"""
+
+    @role_required(User.ROLE_TEACHER, User.ROLE_ADMIN)
+    def get(self, request, exam_id, *args, **kwargs):
+        exam = _load_exam(exam_id)
+        if exam is None:
+            return Response({"message": "考试不存在"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"sessions": service.exam_sessions(exam)}, status=status.HTTP_200_OK
+        )
+
+
 class AgentExamSummaryView(APIView):
     """按考试汇总每个学生的 AI 用量与修改次数。"""
 

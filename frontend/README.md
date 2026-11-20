@@ -71,7 +71,7 @@ src/
 | 08 创建考试 | `/manage/new` | 教师 / 管理员 |
 | 08 编辑考试 | `/manage/:examId/edit` | 教师 / 管理员 |
 | 09 组卷 | `/manage/:examId/problems` | 教师 / 管理员 |
-| 10 监考中心 | `/manage/proctor`（选考）→ `/manage/:examId/proctor` | 教师 / 管理员 |
+| 10 监考中心 | `/manage/proctor`（选考）→ `/manage/:examId/proctor` | 教师 / 管理员；含 AI 使用面板 |
 | 题库管理 | `/manage/problems` | 教师 / 管理员 |
 | 账号管理 | `/manage/accounts` | 管理员 |
 

@@ -17,6 +17,8 @@ urlpatterns = [
          views.AgentChangeRevertView.as_view(), name="agent_change_revert"),
     path("api/v1/agent/workspace", views.AgentWorkspaceView.as_view(),
          name="agent_workspace"),
+    path("api/v1/exams/<int:exam_id>/agent/sessions",
+         views.AgentExamSessionsView.as_view(), name="agent_exam_sessions"),
     path("api/v1/exams/<int:exam_id>/agent/summary",
          views.AgentExamSummaryView.as_view(), name="agent_exam_summary"),
 ]

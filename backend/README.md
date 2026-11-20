@@ -85,6 +85,7 @@ python manage.py shell -c "from user.models import User; from utils.jwt import e
 | `/api/v1/agent/sessions/:id/changes` | GET | 学生 / 教师 | 本题 AI 修改记录（含 diff） |
 | `/api/v1/agent/changes/:id/revert` | POST | 学生 | 撤销一次 AI 修改 |
 | `/api/v1/agent/workspace` | GET / PUT | 学生 | 三级模式的工作区读写（`expectedRevision` 乐观锁） |
+| `/api/v1/exams/:id/agent/sessions` | GET | 教师 / 管理员 | 本场考试全部 AI 会话：每人 token、消息数、修改次数 |
 | `/api/v1/exams/:id/agent/summary` | GET | 教师 / 管理员 | 按学生汇总 AI token 用量与修改次数 |
 | `/api/v1/agent/sessions/:id/transcript` | GET | 本人 / 教师 | 单条会话的完整转录、工具调用与修改记录 |
 

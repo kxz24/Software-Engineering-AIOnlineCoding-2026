@@ -45,7 +45,7 @@ class MockProvider:
         # 粗估：4 个字符约 1 个 token，仅用于本地联调
         return max(1, len(str(text)) // 4)
 
-    def stream(self, messages, tools, max_tokens=1024):
+    def stream(self, messages, tools, max_tokens=4096):
         prompt_tokens = sum(self._count(item.get("content") or "") for item in messages)
         output_tokens = self._count(self.reply)
         yield {"type": "delta", "text": self.reply}

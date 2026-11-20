@@ -218,11 +218,12 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 AGENT_MODEL = os.environ.get("AGENT_MODEL", "deepseek-chat")
 # 单次回复的最大输出 token 与工具轮次上限
-AGENT_MAX_OUTPUT_TOKENS = int(os.environ.get("AGENT_MAX_OUTPUT_TOKENS", "1024"))
+# 说明：该网关把思考(reasoning) token 也计入 max_tokens，上限过低会把正文截断
+AGENT_MAX_OUTPUT_TOKENS = int(os.environ.get("AGENT_MAX_OUTPUT_TOKENS", "4096"))
 AGENT_MAX_TOOL_ROUNDS = int(os.environ.get("AGENT_MAX_TOOL_ROUNDS", "6"))
 # 发给模型的历史消息条数上限（不含系统提示）
 AGENT_HISTORY_MESSAGES = int(os.environ.get("AGENT_HISTORY_MESSAGES", "40"))
 # 模型请求超时（秒）
-AGENT_REQUEST_TIMEOUT = int(os.environ.get("AGENT_REQUEST_TIMEOUT", "120"))
+AGENT_REQUEST_TIMEOUT = int(os.environ.get("AGENT_REQUEST_TIMEOUT", "180"))
 # 提示词版本，写入 AgentSession.prompt_version
 AGENT_PROMPT_VERSION = os.environ.get("AGENT_PROMPT_VERSION", "v1")

@@ -114,8 +114,8 @@ Token 一律使用模型返回的 `usage`，不做本地估算；会话表用 `F
 
 | 接口 | 方法 | 说明 |
 | --- | --- | --- |
+| `/api/v1/exams/{id}/agent/sessions` | GET | 本场考试全部会话（每人 token、消息数、修改次数） |
 | `/api/v1/exams/{id}/agent/summary` | GET | 按学生汇总 token、消息数、AI 修改次数与行数 |
-| `/api/v1/exams/{id}/agent/sessions` | GET | 会话列表（按学生 / 题目筛选） |
 | `/api/v1/agent/sessions/{id}/transcript` | GET | 完整对话 + 工具调用 + 修改记录（本人或教师） |
 | `/api/v1/exams/{id}/agent/export?format=csv` | GET | 导出统计 / 对话 |
 
@@ -163,10 +163,10 @@ backend/agent/
 | `DEEPSEEK_API_KEY` | 空 | 模型密钥，只放在服务端 |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | OpenAI 兼容接口地址 |
 | `AGENT_MODEL` | `deepseek-chat` | 判题循环用支持 function calling 的模型 |
-| `AGENT_MAX_OUTPUT_TOKENS` | `1024` | 单次回复输出上限 |
+| `AGENT_MAX_OUTPUT_TOKENS` | `4096` | 单次回复输出上限；注意网关把思考 token 也计入，过低会截断正文 |
 | `AGENT_MAX_TOOL_ROUNDS` | `6` | 单条消息最多几轮工具调用 |
 | `AGENT_HISTORY_MESSAGES` | `40` | 发给模型的历史消息条数上限 |
-| `AGENT_REQUEST_TIMEOUT` | `120` | 模型请求超时（秒） |
+| `AGENT_REQUEST_TIMEOUT` | `180` | 模型请求超时（秒） |
 | `AGENT_PROMPT_VERSION` | `v1` | 提示词版本，写入会话记录 |
 
 `Exam.agent_token_quota` 控制每生每场考试的 token 额度（0 = 不限）。
@@ -193,7 +193,8 @@ backend/agent/
       `list_submissions`、`run_sample_tests`
 - [x] DeepSeek provider（流式、工具调用、usage 与缓存命中字段）；已通过真实网关联调
 - [x] 三级：工作区 API、`write_file`、`CodeChange`、撤销
-- [x] 教师端：按考试的用量汇总、单会话转录
+- [x] 教师端：按考试的用量汇总、会话列表、单会话转录；监考中心「AI 使用」卡片可查看每生
+      token、完整对话与 AI 代码修改 diff
 - [x] 二级建议模式的完整代码过滤（提示词 + 服务端兜底）
 - [ ] `apply_patch`（当前用整文件 `write_file` 代替）
 - [ ] `clientMessageId` 幂等与 SSE 保活（当前未使用 / 未发送心跳）

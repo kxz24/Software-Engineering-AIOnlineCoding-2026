@@ -10,6 +10,7 @@ import logging
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Sum
+from django.utils import timezone
 
 from . import tools
 from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level
@@ -130,6 +131,8 @@ def _add_usage(session, totals):
         output_tokens=F("output_tokens") + int(totals.get("output", 0)),
         cache_hit_tokens=F("cache_hit_tokens") + int(totals.get("cache_hit", 0)),
         cache_miss_tokens=F("cache_miss_tokens") + int(totals.get("cache_miss", 0)),
+        # QuerySet.update 不会触发 auto_now，这里手动刷新「最近活跃」
+        last_active_at=timezone.now(),
     )
 
 
@@ -394,6 +397,45 @@ def generate_events(session, provider=None):
 # ---------------------------------------------------------------------------
 # 教师端汇总
 # ---------------------------------------------------------------------------
+def exam_sessions(exam):
+    """教师端：本场考试的全部 AI 会话（含用量与消息/修改计数）。"""
+    from django.db.models import Count
+
+    sessions = (
+        AgentSession.objects.filter(exam=exam)
+        .select_related("student", "problem")
+        .annotate(
+            message_count=Count("messages", distinct=True),
+            change_count=Count("code_changes", distinct=True),
+        )
+        .order_by("-last_active_at")
+    )
+    from .levels import LEVEL_LABELS
+
+    return [
+        {
+            "sessionId": session.id,
+            "student": session.student.username,
+            "nickname": session.student.nickname,
+            "problemId": session.problem_id,
+            "problemTitle": session.problem.title,
+            "level": session.level,
+            "levelLabel": LEVEL_LABELS.get(session.level, session.level),
+            "provider": session.provider,
+            "model": session.model,
+            "status": session.status,
+            "inputTokens": session.input_tokens,
+            "outputTokens": session.output_tokens,
+            "cacheHitTokens": session.cache_hit_tokens,
+            "messageCount": session.message_count,
+            "changeCount": session.change_count,
+            "created": session.created.isoformat() if session.created else None,
+            "lastActiveAt": session.last_active_at.isoformat() if session.last_active_at else None,
+        }
+        for session in sessions
+    ]
+
+
 def exam_summary(exam):
     sessions = AgentSession.objects.filter(exam=exam).select_related("student")
     rows = {}

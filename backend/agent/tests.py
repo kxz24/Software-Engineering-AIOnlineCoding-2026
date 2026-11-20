@@ -358,6 +358,35 @@ class ToolPermissionTests(AgentBaseTestCase):
         )
         self.assertNotIn("print(a + b)", assistant.content)
 
+    def test_max_tokens_passed_to_provider(self):
+        """settings 的输出上限要原样传给 provider。"""
+        session = self.create_session()
+        captured = {}
+
+        class CapturingProvider(RoundProvider):
+            def stream(self, messages, tools, max_tokens=1024):
+                captured["max_tokens"] = max_tokens
+                return super().stream(messages, tools, max_tokens)
+
+        with override_settings(AGENT_MAX_OUTPUT_TOKENS=2048):
+            list(service.generate_events(
+                session, provider=CapturingProvider([text_round("好的。")])
+            ))
+        self.assertEqual(captured["max_tokens"], 2048)
+
+    def test_length_finish_reason_passed_through(self):
+        """截断(finish_reason=length)要透传给前端用于提示。"""
+        session = self.create_session()
+        provider = RoundProvider([[
+            {"type": "delta", "text": "写到一半"},
+            {"type": "usage", "usage": {}, "inputTokens": 10, "outputTokens": 5,
+             "cacheHitTokens": 0, "cacheMissTokens": 10},
+            {"type": "done", "finishReason": "length"},
+        ]])
+        events = list(service.generate_events(session, provider=provider))
+        done = [event for event in events if event["type"] == "done"][-1]
+        self.assertEqual(done["finishReason"], "length")
+
     def test_edit_mode_keeps_code(self):
         exam = self.create_exam(Exam.AI_OPEN)
         session = self.create_session(exam)
@@ -463,6 +492,29 @@ class WorkspaceAndSummaryTests(AgentBaseTestCase):
             format="json",
         )
         self.assertEqual(fresh.status_code, 200)
+
+    def test_teacher_can_list_sessions(self):
+        session = self.create_session()
+        service.add_user_message(session, "你好")
+        list(service.generate_events(session, provider=RoundProvider([text_round()])))
+
+        self.auth(self.teacher_token)
+        resp = self.client.get(f"/api/v1/exams/{self.exam.id}/agent/sessions")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()["sessions"]
+        self.assertEqual(len(body), 1)
+        row = body[0]
+        self.assertEqual(row["student"], "2023012345")
+        self.assertEqual(row["problemTitle"], "A + B")
+        self.assertGreater(row["inputTokens"], 0)
+        self.assertGreaterEqual(row["messageCount"], 2)
+        self.assertEqual(row["changeCount"], 0)
+
+        self.auth()
+        self.assertEqual(
+            self.client.get(f"/api/v1/exams/{self.exam.id}/agent/sessions").status_code,
+            403,
+        )
 
     def test_teacher_summary(self):
         session = self.create_session()

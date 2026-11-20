@@ -15,6 +15,7 @@ import {
     fetchExams,
 } from "../../api/client";
 import { submissionLabel } from "../../api/judge";
+import { AgentUsageCard } from "../../components/AgentUsageCard";
 
 /** 每 15 秒自动拉取一次提交动态 */
 const RefreshIntervalMs = 15000;
@@ -418,6 +419,7 @@ function ProctorDashboard({ examId }: { examId: number }) {
                         </div>
 
                         <div className="alert-side">
+                            <AgentUsageCard examId={examId} candidates={exam.candidates}/>
                             <div className="card">
                                 <div className="card-head">
                                     <div className="card-title">提交动态</div>

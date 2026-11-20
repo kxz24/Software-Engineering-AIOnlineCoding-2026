@@ -31,7 +31,7 @@ import {
     revertAgentChange,
     streamAgentMessage,
 } from "../../api/agent";
-import { TerminalLines, formatClock } from "../../mock/workbench";
+import { formatClock } from "../../mock/workbench";
 import { submissionLabel } from "../../api/judge";
 
 type ProblemTabKey = "statement" | "samples" | "submissions";
@@ -310,10 +310,6 @@ export function WorkbenchPage() {
     const [problemTab, setProblemTab] = useState<ProblemTabKey>("statement");
     const [submitting, setSubmitting] = useState(false);
 
-    // 终端演示：页签切换与清屏
-    const [termTab, setTermTab] = useState<"test" | "output" | "problem">("test");
-    const [termCleared, setTermCleared] = useState(false);
-
     // AI 助教：级别 / 会话 / 消息 / 修改记录（接口见 api/agent.ts）
     const [agentCaps, setAgentCaps] = useState<AgentCapabilities | null>(null);
     const [agentSession, setAgentSession] = useState<AgentSessionInfo | null>(null);
@@ -325,6 +321,8 @@ export function WorkbenchPage() {
     const [agentStreaming, setAgentStreaming] = useState(false);
     const [agentStream, setAgentStream] = useState<{ text: string; tools: AgentToolView[] } | null>(null);
     const [agentUsage, setAgentUsage] = useState<{ input: number; output: number } | null>(null);
+    // 回复因达到输出上限被截断时提示考生可以「继续」
+    const [agentTruncated, setAgentTruncated] = useState(false);
     // path -> 服务端工作区版本号；发送消息时带上，后端据此决定是否用编辑器内容覆盖
     const [agentRevisions, setAgentRevisions] = useState<Record<string, number>>({});
     const [agentDraft, setAgentDraft] = useState("");
@@ -480,6 +478,7 @@ export function WorkbenchPage() {
         agentAbortRef.current = controller;
         const sessionIdValue = agentSession.sessionId;
         setAgentStreaming(true);
+        setAgentTruncated(false);
         setAgentError(null);
         setAgentTab("chat");
         setAgentDraft("");
@@ -551,6 +550,11 @@ export function WorkbenchPage() {
                             },
                         };
                     });
+                    break;
+                case "done":
+                    if (event.finishReason === "length") {
+                        setAgentTruncated(true);
+                    }
                     break;
                 case "error":
                     setAgentError(event.message);
@@ -990,47 +994,6 @@ export function WorkbenchPage() {
                             </div>
                         </div>
 
-                        <div className="terminal">
-                            <div className="terminal-head">
-                                <div className="terminal-title">
-                                    <Icon name="terminal" size={13} stroke="#475569"/>
-                                    终端
-                                </div>
-                                <div className={"terminal-tab" + (termTab === "test" ? " active" : "")}
-                                     title="演示数据，运行环境随判题容器接入"
-                                     onClick={() => setTermTab("test")}>测试</div>
-                                <div className={"terminal-tab" + (termTab === "output" ? " active" : "")}
-                                     title="运行输出随判题容器接入"
-                                     onClick={() => setTermTab("output")}>输出</div>
-                                <div className={"terminal-tab" + (termTab === "problem" ? " active" : "")}
-                                     title="运行问题随判题容器接入"
-                                     onClick={() => setTermTab("problem")}>问题</div>
-                                <div className="terminal-tab terminal-clear"
-                                     title="清空当前页签内容"
-                                     onClick={() => setTermCleared(true)}>清屏</div>
-                            </div>
-                            <div className="terminal-body">
-                                {termTab === "test" && !termCleared && TerminalLines.map((line, lineIndex) => (
-                                    <div className="term-line" key={lineIndex}>
-                                        {line.map((segment, index) => (
-                                            <span key={index}
-                                                  className={segment.tone ? "term-" + segment.tone : undefined}>
-                                                {segment.text}
-                                            </span>
-                                        ))}
-                                    </div>
-                                ))}
-                                {termTab !== "test" && !termCleared && (
-                                    <div className="term-line muted">
-                                        {termTab === "output" ? "尚无运行输出。" : "没有运行问题。"}
-                                        运行环境随判题容器接入（下一迭代）。
-                                    </div>
-                                )}
-                                {termCleared && (
-                                    <div className="term-line muted">已清屏；切回「测试」页签可重新载入演示数据。</div>
-                                )}
-                            </div>
-                        </div>
                     </section>
 
                     {/* 右侧：Coding Agent（演示） */}
@@ -1092,6 +1055,11 @@ export function WorkbenchPage() {
                                     <div className="agent-notice">{agentDisabledReason}</div>
                                 )}
                                 {agentError && <div className="agent-notice error">{agentError}</div>}
+                                {agentTruncated && (
+                                    <div className="agent-notice">
+                                        回复达到输出上限被截断；发送「继续」可以让 AI 接着说。
+                                    </div>
+                                )}
                                 {agentCaps && !agentCaps.ready && (
                                     <div className="agent-notice">
                                         模型尚未配置（缺少 API Key），当前只能查看历史记录。
