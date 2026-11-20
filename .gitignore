@@ -87,3 +87,6 @@ config.local.*
 tmp/
 temp/
 *.tmp
+
+# Monaco Editor 本地静态资源（npm install 时由 frontend/scripts/copy-monaco.js 生成，勿提交）
+frontend/public/monaco-vs/

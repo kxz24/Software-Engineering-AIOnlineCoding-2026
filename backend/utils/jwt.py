@@ -99,3 +99,38 @@ def login_required(func):
             return func(*args, **kwargs)
 
     return wrapper
+
+
+def role_required(*allowed_roles):
+    """
+    角色校验装饰器（RBAC）：先做登录校验，再比对当前用户角色。
+    与 login_required 用法一致，可作用于函数视图或 APIView 的方法：
+        @role_required(User.ROLE_ADMIN)
+        def view(request): ...
+
+    allowed_roles 为空时退化为仅登录校验；未授权角色返回 403。
+    """
+
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            if isinstance(args[0], APIView):
+                request = args[1]
+            else:
+                request = args[0]
+
+            jwt_authentication(request)
+            if not request.user:
+                return Response(
+                    {"message": "User must be authorized."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            if allowed_roles and request.user.role not in allowed_roles:
+                return Response(
+                    {"message": "Permission denied: role not allowed."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator

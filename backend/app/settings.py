@@ -10,10 +10,32 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _load_dotenv(path):
+    """读取 backend/.env（不入库），已存在的环境变量优先。"""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_dotenv(BASE_DIR / ".env")
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
@@ -48,6 +70,10 @@ INSTALLED_APPS = [
     "app",
     "corsheaders",
     "user",
+    "problem",
+    "exam",
+    "judge",
+    "agent",
     "rest_framework",
     "drf_spectacular",
     'drf_spectacular_sidecar',
@@ -165,3 +191,39 @@ SALT = "bar"
 
 # Login URL for admin panel
 LOGIN_URL = '/admin/login/'
+
+# ---------------------------------------------------------------------------
+# 判题服务（Celery + Redis + Docker）
+# ---------------------------------------------------------------------------
+# 提交接口只负责入队，判题在独立的 Celery worker 中执行。
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
+CELERY_TASK_TIME_LIMIT = 120          # 单次判分硬上限（秒）
+CELERY_TASK_SOFT_TIME_LIMIT = 110     # 软上限，给清理容器留时间
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# 判题沙箱镜像（由 backend/judge/Dockerfile 构建）
+JUDGE_IMAGE = os.environ.get("JUDGE_IMAGE", "aicoding-judge:latest")
+# 测试环境可关掉入队，避免依赖 Redis
+JUDGE_ENQUEUE_ENABLED = os.environ.get("JUDGE_ENQUEUE_ENABLED", "1") == "1"
+# 单次判题的整体墙钟上限（秒），需小于 CELERY_TASK_TIME_LIMIT
+JUDGE_WALL_TIME_LIMIT = int(os.environ.get("JUDGE_WALL_TIME_LIMIT", "110"))
+
+# ---------------------------------------------------------------------------
+# AI 助教（DeepSeek / 本地模拟）
+# ---------------------------------------------------------------------------
+# provider: mock（默认，未配置密钥时用于本地联调）或 deepseek
+AGENT_PROVIDER = os.environ.get("AGENT_PROVIDER", "mock")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+AGENT_MODEL = os.environ.get("AGENT_MODEL", "deepseek-chat")
+# 单次回复的最大输出 token 与工具轮次上限
+# 说明：该网关把思考(reasoning) token 也计入 max_tokens，上限过低会把正文截断
+AGENT_MAX_OUTPUT_TOKENS = int(os.environ.get("AGENT_MAX_OUTPUT_TOKENS", "4096"))
+AGENT_MAX_TOOL_ROUNDS = int(os.environ.get("AGENT_MAX_TOOL_ROUNDS", "6"))
+# 发给模型的历史消息条数上限（不含系统提示）
+AGENT_HISTORY_MESSAGES = int(os.environ.get("AGENT_HISTORY_MESSAGES", "40"))
+# 模型请求超时（秒）
+AGENT_REQUEST_TIMEOUT = int(os.environ.get("AGENT_REQUEST_TIMEOUT", "180"))
+# 提示词版本，写入 AgentSession.prompt_version
+AGENT_PROMPT_VERSION = os.environ.get("AGENT_PROMPT_VERSION", "v1")

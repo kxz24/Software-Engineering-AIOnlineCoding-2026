@@ -68,7 +68,7 @@ COPY --from=frontend-builder /frontend/build /code/build
 
 EXPOSE 8000
 
-CMD ["gunicorn", "-w4", "-b", "0.0.0.0:8000", "--log-level=debug", "app.wsgi"]
+CMD ["gunicorn", "-w4", "-b", "0.0.0.0:8000", "--timeout", "300", "--log-level=debug", "app.wsgi"]
 
 
 # ---------------------------------------------------------------------------

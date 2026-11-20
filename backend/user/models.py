@@ -24,6 +24,7 @@ class User(models.Model):
     username = models.CharField(max_length=32, unique=True, verbose_name="账号")
     password = models.CharField(max_length=255, verbose_name="密码")
     nickname = models.CharField(max_length=255, verbose_name="用户名称")
+    email = models.CharField(max_length=255, blank=True, default="", verbose_name="邮箱")
     role = models.CharField(
         max_length=16,
         choices=ROLE_CHOICES,
@@ -36,3 +37,27 @@ class User(models.Model):
 
     def __str__(self):
         return f"{self.username}（{self.get_role_display()}）"
+
+
+class AuditLog(models.Model):
+    """
+    关键操作审计日志。
+
+    登录 / 注册 / 权限变更 / 账号导入 / 题库变更等关键操作各写一条，
+    供管理员查询。user 使用 SET_NULL，账号被处理时仍保留操作痕迹。
+    """
+
+    user = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="audit_logs",
+        verbose_name="操作人",
+    )
+    action = models.CharField(max_length=64, verbose_name="动作")
+    detail = models.TextField(blank=True, default="", verbose_name="详情")
+    created = models.DateTimeField(auto_now_add=True, verbose_name="时间")
+
+    def __str__(self):
+        return f"[{self.created:%Y-%m-%d %H:%M:%S}] {self.action}"

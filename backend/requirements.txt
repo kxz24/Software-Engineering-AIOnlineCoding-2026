@@ -1,3 +1,8 @@
+# -*- coding: utf-8 -*-
+# 首行编码声明是必要的：pip 只在文件带 BOM 或前两行有 coding 声明时才按 UTF-8
+# 解码，否则使用系统区域编码（中文 Windows 为 GBK），注释里的中文会让 pip 报
+# UnicodeDecodeError 而无法读取本文件。
+
 # Web 框架
 Django==4.2.5
 djangorestframework==3.15.2
@@ -10,6 +15,26 @@ PyJWT==2.7.0
 django-cors-headers==3.7.0
 drf-spectacular[sidecar]==0.27.2
 
+# 判题：异步队列（Celery + Redis）与 Docker 沙箱 SDK
+celery[redis]==5.3.6
+# Celery 5.3.x 配套的 kombu；新版 kombu 要求 redis-py>=6.1，与下面的 redis 5 冲突
+kombu==5.3.7
+redis==5.0.1
+docker==7.0.0
+# docker SDK 7.0.0 的 unix/npipe adapter 与 requests>=2.32 的 scheme 校验不兼容
+requests==2.31.0
+# Windows 本地开发：Docker SDK 通过 npipe 连接 Docker Desktop 需要。
+# pywin32 306 没有 Python 3.13 的 wheel（PyPI 从 307 起才提供 cp313），
+# 因此按解释器版本分别固定，避免 3.13 下安装直接失败。
+pywin32==306; sys_platform == "win32" and python_version < "3.13"
+pywin32>=307; sys_platform == "win32" and python_version >= "3.13"
+
+# AI 助教：以 OpenAI 兼容协议调用 DeepSeek（流式对话 + 工具调用）
+httpx==0.28.1
+
 # 部署
 gunicorn==20.1.0
-mysqlclient==2.0.3
+# 2.0.3 的安装脚本依赖已被移除的 distutils.msvccompiler，在 Python 3.12+ /
+# 新版 setuptools 下必然构建失败；2.3.0 起提供 Windows 预编译 wheel，
+# 容器内仍从源码构建（Dockerfile 已装 gcc 与 default-libmysqlclient-dev）
+mysqlclient==2.3.0

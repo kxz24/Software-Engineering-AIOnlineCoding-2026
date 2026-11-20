@@ -6,11 +6,11 @@
 
 ## 小组信息
 
-| 角色 | 成员 |
-| --- | --- |
-| Agent / 会议 / 项目管理 | 康祥桢 |
-| 前端 | 石恒睿、李劲逸 |
-| 后端 | 吕浩 |
+| 角色                    | 成员           |
+| ----------------------- | -------------- |
+| Agent / 会议 / 项目管理 | 康祥桢         |
+| 前端                    | 石恒睿、李劲逸 |
+| 后端                    | 吕浩           |
 
 指导教师：刘璘
 
@@ -20,7 +20,7 @@
 .
 ├── frontend/   前端：TypeScript + React
 ├── backend/    后端：Python
-├── agent/      AI 助教 Agent：LangChain
+├── agent/      AI 助教设计说明（后端实现见 backend/agent/）
 └── docs/       文档与原型
     ├── requirements/  需求规格说明书（SRS）源码与用户故事地图
     └── prototype/     墨刀高保真原型（HTML 源文件与预览图）
@@ -28,20 +28,21 @@
 
 ## 技术栈
 
-| 层 | 选型 |
-| --- | --- |
-| 前端 | TypeScript、React |
-| 后端 | Python |
-| AI Agent | LangChain |
-| 代码编辑 | Monaco Editor |
-| 运行时隔离 | 容器化评测环境 |
+| 层         | 选型                         |
+| ---------- | ---------------------------- |
+| 前端       | TypeScript、React            |
+| 后端       | Python                       |
+| AI Agent   | DeepSeek（OpenAI 兼容）+ Django |
+| 代码编辑   | Monaco Editor                |
+| 判题       | Celery + Redis + Docker 沙箱 |
+| 运行时隔离 | 容器化评测环境               |
 
 ## 文档
 
 - 需求规格说明书：[docs/requirements/requirements_v2.tex](docs/requirements/requirements_v2.tex)（XeLaTeX + ctex 编译）
 - 用户故事地图：[docs/requirements/storymap.png](docs/requirements/storymap.png)
 - 产品原型说明：[docs/prototype/README.md](docs/prototype/README.md)
-- 墨刀在线原型：<https://modao.cc/proto/FgnsjqSBtnggwtjPrLH0B5/sharing>
+- 墨刀在线原型：[https://modao.cc/proto/FgnsjqSBtnggwtjPrLH0B5/sharing](https://modao.cc/proto/FgnsjqSBtnggwtjPrLH0B5/sharing)
 
 ## 协作约定
 

@@ -1,0 +1,15 @@
+# Docker 构建上下文排除项（构建上下文是仓库根目录）
+.git
+.gitignore
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/node_modules
+frontend/build
+backend/db.sqlite3
+backend/*.sqlite3
+# 本地密钥只通过环境变量注入，绝不能打进镜像
+.env
+backend/.env
+**/.env
+!**/.env.example
