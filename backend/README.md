@@ -185,23 +185,31 @@ manage.py check
 JUDGE_INTEGRATION=1 python manage.py test judge.tests.JudgeTaskTests
 ```
 
-## 部署（docker-compose）
+## Docker 部署
+
+在装有 Docker 和 Compose 的 Linux 服务器上，从仓库根目录执行：
 
 ```bash
-# 先构建判题沙箱镜像（只需在镜像变更时执行）
-docker compose --profile build build judge-base
-# 再启动 redis / app / judge / nginx / mysql
-docker compose up -d --build
+cd backend
+umask 077
+test -f .env || cp .env.example .env
+nano .env
 ```
 
-拓扑：`nginx（宿主机 8000）→ app（gunicorn，settings_prod）→ mysql`；
-`app ──Redis──> judge worker ──docker.sock──> 一次性沙箱容器`。
+按 `.env.example` 的说明填写密钥和密码。每项用 `openssl rand -hex 32` 单独生成，实际配置保存在服务器的 `.env` 中。
 
-- `judge` 服务挂载 `/var/run/docker.sock`，等价宿主机 root 权限，只能放在受信任的判题服务中；
-- 沙箱容器本身禁用网络、丢弃全部 capabilities、非 root、只读根文件系统，判完即删；
-- `settings.py` 里的 `JWT_SECRET` 与 `settings_prod.py` 里的 MySQL 口令目前是课程模板的占位值，
-  正式部署前改为环境变量注入；
-- 前端构建产物由 nginx 直接托管，`/api` 反向代理到 app 容器（见 `nginx/app.conf`）。
+```bash
+docker compose config --quiet
+docker compose --profile build build judge-base
+docker compose up -d --build
+docker compose ps -a
+curl -I http://127.0.0.1:8000
+```
+
+- `migrate` 显示 `Exited (0)` 表示数据库迁移和 Django 静态文件收集完成。应用和判题服务在此之后启动。
+- Nginx 托管前端并转发后端请求，默认监听宿主机的 `127.0.0.1:8000`。通过宿主机的加密反向代理提供域名访问时，按模板填写域名并启用安全 Cookie。上游反向代理需要保留请求的主机名和协议，并关闭流式响应缓冲。
+- MySQL 使用新的 Docker 数据卷。若旧部署曾使用宿主机目录存放数据库，先备份现有数据，再单独导入。
+- 判题服务通过 `/var/run/docker.sock` 请求宿主机启动一次性沙箱容器，部署时使用受信任的宿主机。
 
 ## 约定
 
