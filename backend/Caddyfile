@@ -1,0 +1,18 @@
+{
+	default_sni 82.157.147.142
+}
+
+http://82.157.147.142 {
+	redir https://82.157.147.142:8043{uri} 308
+}
+
+https://82.157.147.142:8043 {
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory {
+			profile shortlived
+			disable_tlsalpn_challenge
+		}
+	}
+
+	reverse_proxy 127.0.0.1:8000
+}
