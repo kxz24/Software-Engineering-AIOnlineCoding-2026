@@ -120,3 +120,8 @@ class ProjectBundle(models.Model):
     runtime = models.CharField(max_length=64)
     grader_command = models.JSONField(default=list)
     max_score = models.PositiveIntegerField(default=100)
+    environment = models.JSONField(null=True, blank=True)
+    prepared_image = models.CharField(max_length=128, blank=True, default="")
+    preparation_status = models.CharField(max_length=16, default="ready")
+    preparation_message = models.TextField(blank=True, default="")
+    self_check_min_score = models.FloatField(default=1)

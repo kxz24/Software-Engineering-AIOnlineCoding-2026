@@ -20,13 +20,36 @@ from judge.languages import normalize_language
 from judge.sandbox import CaseSpec, run_sandbox
 from judge.scoring import summarize
 from judge.project_sandbox import run_project_sandbox
-from problem.models import Problem
+from problem.models import Problem, ProjectBundle
 from user.controllers import record_audit
 
 logger = logging.getLogger(__name__)
 
 COMPILE_OUTPUT_LIMIT = 8192
 EXCERPT_LIMIT = 2048
+
+
+@shared_task(bind=True, time_limit=600, soft_time_limit=570)
+def prepare_project_bundle(self, bundle_id):
+    """Build a teacher-declared image and verify the private reference submission."""
+    bundle = ProjectBundle.objects.get(pk=bundle_id)
+    bundle.preparation_status = "preparing"
+    bundle.preparation_message = "正在准备工具并试跑参考提交"
+    bundle.save(update_fields=["preparation_status", "preparation_message"])
+    try:
+        from .project_environment import prepare_environment
+
+        image, message = prepare_environment(bundle)
+    except Exception as exc:
+        logger.exception("工程题环境准备失败 bundle=%s", bundle_id)
+        bundle.preparation_status = "failed"
+        bundle.preparation_message = str(exc)[:1000]
+        bundle.prepared_image = ""
+    else:
+        bundle.preparation_status = "ready"
+        bundle.preparation_message = message
+        bundle.prepared_image = image
+    bundle.save(update_fields=["preparation_status", "preparation_message", "prepared_image"])
 
 
 def _truncate(value, limit):

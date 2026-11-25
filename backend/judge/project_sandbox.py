@@ -4,21 +4,35 @@ import io
 import json
 import os
 import tarfile
+import zipfile
 
 from django.conf import settings
 
 from .sandbox import SandboxError, _add_file, _docker_client, _parse_runner_output
 
 
+def _runtime_package(raw):
+    """Keep build inputs and the reference solution out of grading containers."""
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(raw)) as source, zipfile.ZipFile(output, "w") as target:
+        for info in source.infolist():
+            if (info.filename.startswith("private/selfcheck/") or
+                    info.filename.startswith("private/build/") or
+                    info.filename == "private/Dockerfile"):
+                continue
+            target.writestr(info, source.read(info))
+    return output.getvalue()
+
+
 def run_project_sandbox(bundle, files):
-    image = settings.PROJECT_JUDGE_RUNTIMES.get(bundle.runtime)
+    image = getattr(bundle, "prepared_image", "") or settings.PROJECT_JUDGE_RUNTIMES.get(bundle.runtime)
     if not image:
         raise SandboxError("工程题运行环境未配置")
     with open(os.path.join(os.path.dirname(__file__), "assets", "project_runner.py"), "rb") as handle:
         runner = handle.read()
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
-        _add_file(archive, "package.zip", bytes(bundle.archive))
+        _add_file(archive, "package.zip", _runtime_package(bytes(bundle.archive)))
         _add_file(archive, "submission.json", json.dumps({"files": files}, ensure_ascii=False).encode())
         _add_file(archive, "project_runner.py", runner)
 

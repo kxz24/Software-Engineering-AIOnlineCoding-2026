@@ -46,6 +46,8 @@ def problem_summary(problem):
         "sampleCount": problem.samples.filter(is_sample=True).count(),
         "hiddenCount": problem.samples.filter(is_sample=False).count(),
         "hasProjectBundle": hasattr(problem, "project_bundle"),
+        "preparationStatus": problem.project_bundle.preparation_status if hasattr(problem, "project_bundle") else None,
+        "preparationMessage": problem.project_bundle.preparation_message if hasattr(problem, "project_bundle") else "",
         "updated": problem.updated,
     }
 

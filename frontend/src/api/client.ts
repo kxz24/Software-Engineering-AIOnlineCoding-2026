@@ -325,6 +325,8 @@ export interface ProblemSummary {
     sampleCount: number;
     hiddenCount: number;
     updated: string;
+    preparationStatus?: "pending" | "preparing" | "ready" | "failed" | null;
+    preparationMessage?: string;
 }
 
 /** 测试样例（提交格式，也是详情的返回格式） */
@@ -379,6 +381,10 @@ export async function importProject(file: File): Promise<ProblemDetail> {
         throw new ApiError(json.message || "导入失败", response.status);
     }
     return json as ProblemDetail;
+}
+
+export function retryProjectPreparation(problemId: number): Promise<{ status: string; message: string }> {
+    return request(Urls.projectPrepare(problemId), { method: "POST" });
 }
 
 /** 创建题目（可携带用例） */

@@ -9,6 +9,7 @@ import {
     fetchProblem,
     fetchProblems,
     importProject,
+    retryProjectPreparation,
     ProblemSummary,
     SamplePayload,
     updateProblem,
@@ -141,6 +142,19 @@ export function ProblemBankPage() {
         loadProblems("");
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    const preparing = problems.some(problem =>
+        problem.preparationStatus === "pending" || problem.preparationStatus === "preparing"
+    );
+    useEffect(() => {
+        if (!preparing) return;
+        const timer = window.setInterval(() => {
+            fetchProblems(keyword ? { keyword } : {})
+                .then(result => setProblems(result.problems))
+                .catch((e: ApiError) => setError(e.message));
+        }, 5000);
+        return () => window.clearInterval(timer);
+    }, [preparing, keyword]);
 
     const openCreate = () => {
         setForm({ ...EmptyForm, samples: [] });
@@ -281,7 +295,11 @@ export function ProblemBankPage() {
                                const file = event.target.files && event.target.files[0];
                                if (!file) return;
                                importProject(file)
-                                   .then(() => { toast("工程题已导入", "success"); loadProblems(keyword); })
+                                   .then(result => {
+                                       toast(result.preparationStatus === "ready" ? "工程题已导入" :
+                                           "工程题已上传，正在准备环境并试跑参考提交", "success");
+                                       loadProblems(keyword);
+                                   })
                                    .catch((e: ApiError) => setError(e.message));
                                event.target.value = "";
                            }}/>
@@ -554,10 +572,24 @@ export function ProblemBankPage() {
                     )}
                     {problems.map(problem => (
                         <tr key={problem.id}>
-                            <td style={{ fontWeight: 600 }}>{problem.title}</td>
+                            <td style={{ fontWeight: 600 }}>
+                                {problem.title}
+                                {problem.preparationStatus && (problem.preparationStatus !== "ready" || problem.preparationMessage) && (
+                                    <div style={{ fontWeight: 400, fontSize: 11, color: problem.preparationStatus === "failed" ? "#b91c1c" : problem.preparationStatus === "ready" ? "#15803d" : "#64748b" }}>
+                                        {problem.preparationStatus === "failed" ? "环境自检失败" : problem.preparationStatus === "ready" ? "环境自检通过" : "环境准备中"}
+                                        {problem.preparationMessage ? `：${problem.preparationMessage}` : ""}
+                                    </div>
+                                )}
+                            </td>
                             <td><span className="badge blue">{TypeLabels[problem.type] || problem.type}</span></td>
                             <td>{LanguageLabels[problem.language] || problem.language}</td>
                             <td>
+                                {problem.preparationStatus === "failed" && (
+                                    <><span className="link" onClick={() => retryProjectPreparation(problem.id)
+                                        .then(() => { toast("已重新开始准备", "success"); loadProblems(keyword); })
+                                        .catch((e: ApiError) => setError(e.message))}>重试自检</span>
+                                    <span style={{ color: "#e2e8f0", margin: "0 6px" }}>|</span></>
+                                )}
                                 <span className={DifficultyBadge[problem.difficulty] || "badge gray"}>
                                     {DifficultyLabels[problem.difficulty] || problem.difficulty}
                                 </span>

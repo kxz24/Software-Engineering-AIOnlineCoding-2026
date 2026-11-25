@@ -215,6 +215,7 @@ if (not isinstance(_extra_project_runtimes, dict) or
             for name, image in _extra_project_runtimes.items())):
     raise ValueError("PROJECT_JUDGE_RUNTIMES_JSON must map runtime names to image names")
 PROJECT_JUDGE_RUNTIMES.update(_extra_project_runtimes)
+PROJECT_MANAGED_BASE_IMAGE = os.environ.get("PROJECT_MANAGED_BASE_IMAGE", "python:3.11-slim")
 # 测试环境可关掉入队，避免依赖 Redis
 JUDGE_ENQUEUE_ENABLED = os.environ.get("JUDGE_ENQUEUE_ENABLED", "1") == "1"
 # 单次判题的整体墙钟上限（秒），需小于 CELERY_TASK_TIME_LIMIT
