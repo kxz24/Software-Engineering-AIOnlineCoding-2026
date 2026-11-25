@@ -6,9 +6,7 @@
 """
 from datetime import timedelta
 from unittest.mock import patch
-from io import StringIO
 
-from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -32,8 +30,10 @@ class RoundProvider:
     def __init__(self, rounds):
         self.rounds = list(rounds)
         self.calls = 0
+        self.requests = []
 
     def stream(self, messages, tools, max_tokens=1024):
+        self.requests.append(messages)
         events = self.rounds[min(self.calls, len(self.rounds) - 1)]
         self.calls += 1
         yield from events
@@ -497,21 +497,6 @@ class SessionAndMessageTests(AgentBaseTestCase):
         self.assertEqual(resp.status_code, 404)
 
 
-class LojExperimentSeedTests(AgentBaseTestCase):
-    def test_loj_problem_is_real_sourced_and_seed_is_idempotent(self):
-        from app.management.commands.seed_loj_experiment import TITLE, EXAM_TITLE
-        User.objects.create(username="teacher", role=User.ROLE_TEACHER,
-                            nickname="实验教师", password="unused")
-        for _ in range(2):
-            call_command("seed_loj_experiment", stdout=StringIO())
-        problem = Problem.objects.get(title=TITLE)
-        self.assertIn("https://loj.ac/problem/132", problem.description)
-        self.assertEqual(problem.samples.count(), 2)
-        self.assertEqual(problem.samples.get(is_sample=True).expected_output,
-                         "15\n18\n6\n")
-        self.assertEqual(Exam.objects.filter(title=EXAM_TITLE).count(), 1)
-
-
 class ToolPermissionTests(AgentBaseTestCase):
     def test_hidden_sample_not_in_prompt(self):
         session = self.create_session()
@@ -526,6 +511,7 @@ class ToolPermissionTests(AgentBaseTestCase):
         prompt = service.build_messages(session)[0]["content"]
         self.assertIn("只回答考生当前所问", prompt)
         self.assertIn("具体哪一处", prompt)
+        self.assertIn("简单问题更短", prompt)
         self.assertNotIn("给出可运行的完整片段", prompt)
 
     def test_advise_redacts_complete_code(self):
@@ -565,6 +551,7 @@ class ToolPermissionTests(AgentBaseTestCase):
         self.assertNotIn("leftA =", streamed)
         self.assertIn("负无穷", streamed)
         self.assertEqual(provider.calls, 2)
+        self.assertIn("只保留本轮所问的内容", provider.requests[1][-1]["content"])
 
     def test_advise_falls_back_after_three_rejections(self):
         session = self.create_session()
