@@ -330,6 +330,7 @@ export function WorkbenchPage() {
     const agentAbortRef = useRef<AbortController | null>(null);
 
     const chatRef = useRef<HTMLDivElement>(null);
+    const agentStreamText = agentStream ? agentStream.text : "";
 
     // 追加消息 / 流式输出时滚动到会话底部
     useEffect(() => {
@@ -337,7 +338,7 @@ export function WorkbenchPage() {
         if (chat) {
             chat.scrollTop = chat.scrollHeight;
         }
-    }, [agentMessages.length, agentStream?.text, agentStreaming]);
+    }, [agentMessages.length, agentStreamText, agentStreaming]);
 
     /** 当前题目的提交次数 */
     const mySubmissions = useMemo(
@@ -899,7 +900,7 @@ export function WorkbenchPage() {
                                         <Icon name="sparkles" size={13}/>
                                         <span>
                                             <strong>AI 使用策略：{AiModeLabels[detail.aiMode] || detail.aiMode}模式</strong>
-                                            {" · 对话留痕将计入过程报告（Agent 服务下一迭代接入）"}
+                                            {" · AI 对话会留痕，可用于学习过程分析"}
                                         </span>
                                     </div>
                                 </div>
@@ -1016,7 +1017,7 @@ export function WorkbenchPage() {
                                 {agentCaps && (
                                     <span className="mode-chip">
                                         <Icon name="lock" size={10} strokeWidth={2}/>
-                                        {agentCaps.canEditCode ? "可改代码" : "仅思路"}
+                                        {agentCaps.canEditCode ? "可改代码" : "按需答疑"}
                                     </span>
                                 )}
                                 <span className="mode-chip">
@@ -1035,7 +1036,7 @@ export function WorkbenchPage() {
                                     修改{agentChanges.length > 0 ? ` ${agentChanges.length}` : ""}
                                 </span>
                                 <span className="agent-tab-hint">
-                                    {agentCaps.canEditCode ? "AI 可以直接修改工作区" : "AI 仅给思路（代码会被过滤）"}
+                                    {agentCaps.canEditCode ? "AI 可以直接修改工作区" : "AI 按提问范围回答，不修改工作区"}
                                 </span>
                             </div>
                         )}
@@ -1070,7 +1071,7 @@ export function WorkbenchPage() {
                                     <div className="msg-agent">
                                         <div className="agent-meta">
                                             <span className="name">Coding Agent</span>
-                                            <span className="time">生成中…</span>
+                                            <span className="time">回答处理中…</span>
                                         </div>
                                         {agentStream.text && (
                                             <div className="agent-card">{renderAgentText(agentStream.text)}</div>
@@ -1088,7 +1089,7 @@ export function WorkbenchPage() {
                                         ))}
                                         {!agentStream.text && agentStream.tools.length === 0 && (
                                             <div className="agent-card">
-                                                <div className="agent-text muted">思考中…</div>
+                                                <div className="agent-text muted">正在生成并审核回复…</div>
                                             </div>
                                         )}
                                     </div>
@@ -1099,7 +1100,7 @@ export function WorkbenchPage() {
                                             可以问我题目思路、帮你看代码或分析 bug。
                                             {agentCaps.canEditCode
                                                 ? "当前级别允许我直接修改工作区。"
-                                                : "当前级别我只给思路和调试方向，不提供完整代码，也不会改动工作区。"}
+                                                : "我会针对你的具体问题回答，不提供整题代码，也不会改动工作区。"}
                                         </div>
                                     )}
                             </div>
@@ -1142,7 +1143,7 @@ export function WorkbenchPage() {
                                                   : !agentCaps ? (agentLoading ? "正在加载 AI…" : "AI 暂不可用")
                                                       : !agentCaps.ready ? "AI 暂不可用：未配置模型密钥"
                                                           : agentCaps.canEditCode ? "描述问题，AI 可以直接修改代码…"
-                                                              : "描述问题，AI 会给出思路（不提供完整代码）…"
+                                                              : "描述你想了解的概念、思路或具体卡住的地方…"
                                           }
                                           spellCheck={false}
                                           onChange={event => setAgentDraft(event.target.value)}
@@ -1184,7 +1185,7 @@ export function WorkbenchPage() {
                             </div>
                             <div className="agent-foot">
                                 <Icon name="lock" size={10} strokeWidth={2}/>
-                                对话将随试卷冻结，并计入过程评分
+                                对话会留痕，可供学习过程分析
                             </div>
                         </div>
                     </aside>

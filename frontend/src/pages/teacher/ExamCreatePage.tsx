@@ -327,7 +327,7 @@ export function ExamCreatePage() {
                                 <span className="section-num">4</span>
                                 <div>
                                     <div className="section-title">AI 使用策略</div>
-                                    <div className="section-sub">决定考生可以使用 Coding Agent 的范围（Agent 服务下一迭代接入）</div>
+                                    <div className="section-sub">决定考生可以使用 Coding Agent 的范围</div>
                                 </div>
                             </div>
                             <div className="radio-row">
