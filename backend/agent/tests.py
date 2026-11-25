@@ -150,6 +150,42 @@ class AdviseGuardTests(SimpleTestCase):
         with self.assertRaises(GuardError):
             review_answer("思路是什么？", "答案", RoundProvider([text_round("当然可以")]))
 
+    def test_experiment_scope_allows_one_requested_line_only(self):
+        from .policy import scoped_violation
+        line = "这里可写 `leftA = a[i-1] if i > 0 else float('-inf')`。"
+        self.assertTrue(scoped_violation("这题有什么思路？", line))
+        self.assertFalse(scoped_violation("leftA 这一行怎么处理空边界？", line))
+        self.assertTrue(scoped_violation(
+            "leftA 这一行怎么处理空边界？",
+            line + " 同时写 `rightA = a[i] if i < n else float('inf')`。"))
+
+    def test_experiment_scope_still_blocks_full_program(self):
+        from .policy import scoped_violation
+        self.assertTrue(scoped_violation("请写完整程序", "```python\nprint(1)\n```"))
+
+    def test_help_report_accepts_observed_turns_only(self):
+        from .report import build_help_report
+        provider = RoundProvider([text_round(
+            '{"turns":[{"userSeq":1,"activity":"algorithm","helpLevel":1,'
+            '"evidence":"询问切分思路"}],"overview":"主要寻求算法思路",'
+            '"limitations":"仅根据对话，不能判断是否真正学会"}'
+        )])
+        result = build_help_report([
+            {"seq": 1, "role": "user", "content": "切分思路是什么？"},
+            {"seq": 2, "role": "assistant", "content": "可以考虑平衡左右两侧。"},
+        ], provider)
+        self.assertEqual(result["turns"][0]["activity"], "algorithm")
+        self.assertEqual(result["turns"][0]["helpLevel"], 1)
+
+    def test_help_report_rejects_fabricated_user_turn(self):
+        from .report import ReportError, build_help_report
+        provider = RoundProvider([text_round(
+            '{"turns":[{"userSeq":99,"activity":"coding","helpLevel":4,'
+            '"evidence":"不存在"}],"overview":"","limitations":""}'
+        )])
+        with self.assertRaises(ReportError):
+            build_help_report([{"seq": 1, "role": "user", "content": "你好"}], provider)
+
 
 class AgentBaseTestCase(TestCase):
     def setUp(self):
@@ -417,11 +453,11 @@ class ToolPermissionTests(AgentBaseTestCase):
         self.assertNotIn("9 9", system)       # 隐藏用例不能出现
         self.assertIn("样例 1", system)
 
-    def test_limited_prompt_does_not_request_runnable_snippets(self):
+    def test_limited_prompt_tracks_requested_depth(self):
         session = self.create_session()
         prompt = service.build_messages(session)[0]["content"]
         self.assertIn("只回答考生当前所问", prompt)
-        self.assertIn("不提供可直接照写的实现语句", prompt)
+        self.assertIn("具体哪一处", prompt)
         self.assertNotIn("给出可运行的完整片段", prompt)
 
     def test_advise_redacts_complete_code(self):
