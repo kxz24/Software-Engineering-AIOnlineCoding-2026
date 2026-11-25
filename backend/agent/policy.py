@@ -139,27 +139,28 @@ def _single_fenced_line(text):
 def scoped_violation(question, text):
     """Experimental mode: allow one local line only when explicitly requested."""
     text = str(text or "")
+    issues = []
     if len(text) > 750:
-        return "回答过长；只解释当前问题，概念题最多用一个小例子。"
+        issues.append("回答过长；只解释当前问题，概念题最多用一个小例子。")
     if diagnostic_only_request(question):
         inline_code = re.findall(r"`([^`\n]+)`", text)
         if (_EXECUTABLE_INLINE.search(text)
                 or _IMPORT_STATEMENT.search(text)
                 or any(_looks_like_code(line) for line in text.splitlines())
                 or any(_looks_like_code(span) for span in inline_code)):
-            return "学生只问报错原因；请定位原因，不主动给可照写的修复语句。"
+            issues.append("学生只问报错原因；请定位原因，不主动给可照写的修复语句。")
     if _FENCED.search(text) or text.count("```") % 2:
         if not localized_request(question) or not _single_fenced_line(text):
-            return "不能给完整代码块；只回答学生指出的局部问题。"
-        return ""
+            issues.append("不能给完整代码块；只回答学生指出的局部问题。")
+        return "；".join(issues)
     inline = _EXECUTABLE_INLINE.findall(text)
     if len(inline) > 1:
-        return "包含多处可照写的语句；一次只解释学生指定的一处。"
+        issues.append("包含多处可照写的语句；请删去可照写的表达式。")
     if inline and not localized_request(question):
-        return "学生没有指出具体实现位置；请只讲概念或调试方向。"
+        issues.append("学生没有指出具体实现位置；请只讲概念或调试方向。")
     if _strip_code_runs(text) != text.strip():
-        return "包含连续代码语句；请缩小到局部提示。"
-    return ""
+        issues.append("包含连续代码语句；请缩小到局部提示。")
+    return "；".join(issues)
 
 
 def sanitize_scoped_text(text, question=""):

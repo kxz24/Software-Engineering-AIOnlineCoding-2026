@@ -4,7 +4,7 @@ import json
 
 from django.conf import settings
 
-from .providers import DeepSeekProvider, ProviderError
+from .providers import DeepSeekProvider, ProviderError, thinking_off_body
 
 
 class ReportError(Exception):
@@ -109,11 +109,14 @@ def build_help_report(messages, provider):
 
 
 def report_for_session(session):
+    model = getattr(settings, "AGENT_REPORT_MODEL", "Qwen3.8-Flash")
     provider = DeepSeekProvider(
         api_key=settings.DEEPSEEK_API_KEY,
         base_url=getattr(settings, "AGENT_GUARD_BASE_URL", settings.DEEPSEEK_BASE_URL),
-        model=getattr(settings, "AGENT_REPORT_MODEL", "Qwen3.8-Flash"),
+        model=model,
         timeout=int(getattr(settings, "AGENT_REQUEST_TIMEOUT", 180)),
+        extra_body=(thinking_off_body(model)
+                    if getattr(settings, "AGENT_REPORT_DISABLE_THINKING", True) else None),
     )
     messages = list(session.messages.filter(role__in=("user", "assistant"))
                     .order_by("seq").values("seq", "role", "content"))

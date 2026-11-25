@@ -7,6 +7,8 @@
 from datetime import timedelta
 from unittest.mock import patch
 
+import httpx
+
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -20,7 +22,7 @@ from . import service, tools
 from .levels import TOOLS_BY_LEVEL
 from .policy import CODE_BLOCK_PLACEHOLDER, conservative_violation, sanitize_advise_text
 from .guard import GuardError
-from .providers import DeepSeekProvider, _extract_usage
+from .providers import DeepSeekProvider, _extract_usage, thinking_off_body
 from .models import AgentMessage, AgentSession, CodeChange, WorkspaceFile
 
 
@@ -81,6 +83,30 @@ class ProviderTests(SimpleTestCase):
         parsed = _extract_usage(usage)
         self.assertEqual(parsed["cacheHitTokens"], 300)
         self.assertEqual(parsed["cacheMissTokens"], 200)
+
+    def test_retry_thinking_parameter_changes_only_retry_payload(self):
+        requests = []
+        def respond(request):
+            requests.append(__import__("json").loads(request.content))
+            return httpx.Response(200, text=(
+                'data: {"choices":[{"delta":{"content":"好"},"finish_reason":"stop"}]}\n\n'
+                'data: [DONE]\n\n'))
+        client = httpx.Client(transport=httpx.MockTransport(respond))
+        provider = DeepSeekProvider("test-key", base_url="https://example.test",
+                                    model="DeepSeek-V4-Flash-0731")
+        with client, patch("agent.providers._shared_client", return_value=client):
+            list(provider.stream([{"role": "user", "content": "问题"}], []))
+            list(provider.without_thinking().stream(
+                [{"role": "user", "content": "问题"}], []))
+        self.assertNotIn("thinking", requests[0])
+        self.assertEqual(requests[1]["thinking"], {"type": "disabled"})
+        self.assertEqual(len(requests), 2)
+
+    def test_thinking_switch_matches_model_family(self):
+        self.assertEqual(thinking_off_body("Qwen3.8-Flash"),
+                         {"enable_thinking": False})
+        self.assertEqual(thinking_off_body("DeepSeek-V4-Flash-0731"),
+                         {"thinking": {"type": "disabled"}})
 
 
 class AdviseGuardTests(SimpleTestCase):
@@ -162,6 +188,17 @@ class AdviseGuardTests(SimpleTestCase):
         with self.assertRaises(GuardError):
             review_answer("思路是什么？", "答案", RoundProvider([text_round("当然可以")]))
 
+    def test_review_prompt_requests_all_issues_in_one_pass(self):
+        from .guard import REVIEW_RULES
+        self.assertIn("所有独立的越界问题", REVIEW_RULES)
+        self.assertNotIn("只指出第一处", REVIEW_RULES)
+
+    def test_guard_disables_thinking_for_configured_provider(self):
+        from .guard import configured_reviewer
+        with override_settings(DEEPSEEK_API_KEY="test", AGENT_GUARD_MODEL="Qwen3.8-Flash"):
+            provider = configured_reviewer().provider
+        self.assertEqual(provider.extra_body, {"enable_thinking": False})
+
     def test_experiment_scope_allows_one_requested_line_only(self):
         from .policy import scoped_violation
         line = "这里可写 `leftA = a[i-1] if i > 0 else float('-inf')`。"
@@ -174,6 +211,14 @@ class AdviseGuardTests(SimpleTestCase):
     def test_experiment_scope_still_blocks_full_program(self):
         from .policy import scoped_violation
         self.assertTrue(scoped_violation("请写完整程序", "```python\nprint(1)\n```"))
+
+    def test_local_backstop_reports_all_independent_issues(self):
+        from .policy import scoped_violation
+        candidate = "`left = a[i]`、`right = b[j]`。" + "多余的解题步骤。" * 150
+        issues = scoped_violation("大体思路是什么？", candidate)
+        self.assertIn("回答过长", issues)
+        self.assertIn("包含多处", issues)
+        self.assertIn("没有指出具体实现位置", issues)
 
     def test_diagnosis_question_does_not_authorize_a_fix_line(self):
         from .policy import diagnostic_only_request, scoped_violation
@@ -589,6 +634,34 @@ class ToolPermissionTests(AgentBaseTestCase):
         self.assertIn("负无穷", streamed)
         self.assertEqual(provider.calls, 2)
         self.assertIn("先把问题讲明白", provider.requests[1][-1]["content"])
+        self.assertEqual(provider.requests[1][-2], {
+            "role": "assistant", "content": "`leftA = a[i-1] if i > 0 else float('-inf')`"})
+        self.assertIn("删除可直接使用的赋值式", provider.requests[1][-1]["content"])
+        self.assertIn("学生没有指出具体实现位置", provider.requests[1][-1]["content"])
+
+    def test_retry_disables_thinking_but_initial_answer_keeps_it(self):
+        session = self.create_session()
+
+        class ThinkingProvider(RoundProvider):
+            def __init__(self, rounds):
+                super().__init__(rounds)
+                self.fast = self
+                self.disable_calls = 0
+
+            def without_thinking(self):
+                self.disable_calls += 1
+                return self.fast
+
+        provider = ThinkingProvider([
+            text_round("`answer = 42`"), text_round("只说明当前概念。")])
+        class Reviewer:
+            def review(self, question, answer):
+                return {"allowed": answer != "`answer = 42`",
+                        "feedback": "去掉赋值式", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+        list(service.generate_events(session, provider=provider, reviewer=Reviewer()))
+        self.assertEqual(provider.disable_calls, 1)
+        self.assertEqual(provider.calls, 2)
 
     def test_natural_concept_question_keeps_useful_explanation(self):
         session = self.create_session()

@@ -222,6 +222,9 @@ AGENT_GUARD_MODEL = os.environ.get("AGENT_GUARD_MODEL", "Qwen3.8-Flash")
 AGENT_REPORT_MODEL = os.environ.get("AGENT_REPORT_MODEL", AGENT_GUARD_MODEL)
 AGENT_GUARD_BASE_URL = os.environ.get("AGENT_GUARD_BASE_URL", DEEPSEEK_BASE_URL)
 AGENT_GUARD_TIMEOUT = int(os.environ.get("AGENT_GUARD_TIMEOUT", "45"))
+AGENT_GUARD_DISABLE_THINKING = os.environ.get("AGENT_GUARD_DISABLE_THINKING", "1") == "1"
+AGENT_RETRY_DISABLE_THINKING = os.environ.get("AGENT_RETRY_DISABLE_THINKING", "1") == "1"
+AGENT_REPORT_DISABLE_THINKING = os.environ.get("AGENT_REPORT_DISABLE_THINKING", "1") == "1"
 # 单次回复的最大输出 token 与工具轮次上限
 # 说明：该网关把思考(reasoning) token 也计入 max_tokens，上限过低会把正文截断
 AGENT_MAX_OUTPUT_TOKENS = int(os.environ.get("AGENT_MAX_OUTPUT_TOKENS", "4096"))

@@ -12,13 +12,42 @@ provider 的输入输出与具体厂商无关：
     {"type": "usage",     "usage": {...}, "inputTokens": n, "outputTokens": n, ...}
     {"type": "done",      "finishReason": "stop" | "tool_calls" | "length"}
 """
+import atexit
 import json
 import logging
+import threading
 
 import httpx
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+_client = None
+_client_lock = threading.Lock()
+
+
+def _shared_client():
+    """Reuse the TLS context and connections across answer, review and retry calls."""
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                _client = httpx.Client()
+    return _client
+
+
+def _close_shared_client():
+    if _client is not None:
+        _client.close()
+
+
+atexit.register(_close_shared_client)
+
+
+def thinking_off_body(model):
+    """The configured gateway uses different off switches for Qwen and DeepSeek."""
+    if model.lower().startswith("qwen"):
+        return {"enable_thinking": False}
+    return {"thinking": {"type": "disabled"}}
 
 
 class ProviderError(Exception):
@@ -92,11 +121,19 @@ class DeepSeekProvider:
 
     name = "deepseek"
 
-    def __init__(self, api_key, base_url=None, model=None, timeout=120):
+    def __init__(self, api_key, base_url=None, model=None, timeout=120,
+                 extra_body=None):
         self.api_key = api_key
         self.base_url = (base_url or "https://api.deepseek.com").rstrip("/")
         self.model = model or "deepseek-chat"
         self.timeout = timeout
+        self.extra_body = dict(extra_body or {})
+
+    def without_thinking(self):
+        """Return a fast variant for editing an existing answer, not initial solving."""
+        return type(self)(self.api_key, self.base_url, self.model, self.timeout,
+                          extra_body={**self.extra_body,
+                                      **thinking_off_body(self.model)})
 
     def _chat_url(self):
         """兼容两种 base_url 写法：带 /v1、不带 /v1，或直接给到完整路径。"""
@@ -115,6 +152,7 @@ class DeepSeekProvider:
             "stream": True,
             # 流式时也要拿到 usage，用于 token 记录
             "stream_options": {"include_usage": True},
+            **self.extra_body,
         }
         if tools:
             payload["tools"] = tools
@@ -127,10 +165,10 @@ class DeepSeekProvider:
         tool_calls = {}
         finish_reason = "stop"
         try:
-            with httpx.Client(timeout=httpx.Timeout(self.timeout, connect=10)) as client:
-                with client.stream(
+            with _shared_client().stream(
                     "POST", self._chat_url(),
                     headers=headers, json=payload,
+                    timeout=httpx.Timeout(self.timeout, connect=10),
                 ) as response:
                     if response.status_code != 200:
                         body = response.read().decode("utf-8", "replace")[:500]
