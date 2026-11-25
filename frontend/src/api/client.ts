@@ -324,6 +324,7 @@ export interface ProblemSummary {
     outputLimitKb: number;
     sampleCount: number;
     hiddenCount: number;
+    hasProjectBundle?: boolean;
     updated: string;
     preparationStatus?: "pending" | "preparing" | "ready" | "failed" | null;
     preparationMessage?: string;

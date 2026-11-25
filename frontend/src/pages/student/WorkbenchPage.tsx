@@ -289,6 +289,8 @@ export function WorkbenchPage() {
     const currentPath = problem ? (
         selectedProjectFile[problem.problemId] || filesForProblem(problem)[0]?.path || ""
     ) : "";
+    const currentFileLabel = problem?.publicFiles && currentPath.includes("/") ?
+        currentPath.slice(currentPath.indexOf("/") + 1) : currentPath;
     const currentLanguage = (currentPath && languages[currentPath]) ||
         (problem ? (problem.publicFiles ? languageForPath(currentPath) :
             (LanguageExtensions[problem.language] ? problem.language : languageForPath(currentPath))) : "plaintext");
@@ -660,6 +662,7 @@ export function WorkbenchPage() {
         }
         const confirmed = window.confirm(
             `确认提交「任务 ${problem.order + 1}：${problem.title}」？\n` +
+            (problem.publicFiles ? `本次将一并提交 ${Object.keys(problem.publicFiles).length} 个文件。\n` : "") +
             `提交后在后台自动判题，本题剩余 ${remaining - 1} 次机会。`
         );
         if (!confirmed) {
@@ -791,7 +794,7 @@ export function WorkbenchPage() {
                                 disabled={submitting || finished || remaining <= 0}
                                 title={finished ? "考试已结束" : remaining <= 0 ? "本题提交次数已用完" : undefined}>
                             <Icon name="arrow-up" size={14} strokeWidth={1.9}/>
-                            提交答卷
+                            提交本题
                             <span className="sub">剩余 {remaining} 次</span>
                         </button>
                         <div className="avatar">{(user?.nickname || "生").slice(0, 1)}</div>
@@ -808,6 +811,11 @@ export function WorkbenchPage() {
                                 </span>
                                 <span className="meta-chip blue">{TypeLabels[problem.type] || problem.type}</span>
                                 <span className="meta-chip">{problem.language}</span>
+                                {problem.publicFiles && (
+                                    <span className="meta-chip blue">
+                                        {Object.keys(problem.publicFiles).length} 个文件一并提交
+                                    </span>
+                                )}
                             </>
                         )}
                         <span className="meta-chip">{detail.submitLimit} 次提交 / 题</span>
@@ -837,21 +845,35 @@ export function WorkbenchPage() {
                         </div>
                         <div className="section-label">{detail.course || "EXAM"}</div>
                         <div className="tree">
-                            {problems.map(item => filesForProblem(item).map(file => {
-                                const isActive = !!problem && item.problemId === problem.problemId && currentPath === file.path;
+                            {problems.map(item => {
+                                const files = filesForProblem(item);
                                 return (
-                                    <div key={file.path}
-                                         className={"tree-row lv1" + (isActive ? " active" : "")}
-                                         onClick={() => {
-                                             setCurrentProblemId(item.problemId);
-                                             setSelectedProjectFile(current => ({ ...current, [item.problemId]: file.path }));
-                                         }}>
-                                        <Icon name="file" size={13} strokeWidth={1.7} className="file-ico"/>
-                                        <span>{file.label}</span>
-                                        {modified[file.path] && <span className="modified-dot"/>}
-                                    </div>
+                                    <React.Fragment key={item.problemId}>
+                                        <div className="tree-row root" title={item.title}
+                                             onClick={() => setCurrentProblemId(item.problemId)}>
+                                            <Icon name="folder" size={13} strokeWidth={1.7} className="folder-ico"/>
+                                            <span className="tree-filename">任务 {item.order + 1} · {item.title}</span>
+                                            <span className="tree-count">{files.length}</span>
+                                        </div>
+                                        {files.map(file => {
+                                            const isActive = !!problem && item.problemId === problem.problemId && currentPath === file.path;
+                                            return (
+                                                <div key={file.path}
+                                                     className={"tree-row lv2" + (isActive ? " active" : "")}
+                                                     title={file.label}
+                                                     onClick={() => {
+                                                         setCurrentProblemId(item.problemId);
+                                                         setSelectedProjectFile(current => ({ ...current, [item.problemId]: file.path }));
+                                                     }}>
+                                                    <Icon name="file" size={13} strokeWidth={1.7} className="file-ico"/>
+                                                    <span className="tree-filename">{file.label}</span>
+                                                    {modified[file.path] && <span className="modified-dot"/>}
+                                                </div>
+                                            );
+                                        })}
+                                    </React.Fragment>
                                 );
-                            }))}
+                            })}
                             {problems.length === 0 && (
                                 <div className="tree-row lv1 muted">本场考试没有题目</div>
                             )}
@@ -989,7 +1011,7 @@ export function WorkbenchPage() {
                             <div className="editor-tabs">
                                 <div className={"editor-tab active"}>
                                     <Icon name="file" size={12} stroke="#2563eb"/>
-                                    {currentPath || "—"}
+                                    {currentFileLabel || "—"}
                                     {modified[currentPath] && <span className="modified-dot"/>}
                                 </div>
                                 <div className="editor-actions">
