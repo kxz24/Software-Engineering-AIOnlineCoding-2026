@@ -17,7 +17,7 @@ from . import tools
 from .guard import GuardError, configured_reviewer
 from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level
 from .models import AgentMessage, AgentSession
-from .policy import conservative_violation, sanitize_advise_text
+from .policy import localized_request, scoped_violation, sanitize_scoped_text
 from .providers import ProviderError, get_provider, provider_info
 
 logger = logging.getLogger(__name__)
@@ -171,18 +171,17 @@ def _system_prompt(session):
             "你只能用自然语言解释本题思路、检查点和调试方向，不能修改工作区。"
             "只回答考生当前所问，不主动给下一步的实现细节。"
             "每次回复尽量控制在 400 字以内；若提问很宽泛，只讲一个核心概念，"
-            "请考生明确卡住的地方再继续。"
-            "不得输出可直接使用的代码语句、赋值式、条件式、循环或完整解法；"
-            "也不要用伪代码、逐步实现清单或分散的行内片段拼出完整解法。"
-            "可以用短的行内名称提及 API、变量或概念，但不要写可执行表达式。"
-            "如果考生要求代码，简短说明当前模式不能提供具体实现，"
-            "然后只解释相关概念或指出可自行检查的地方。"
+            "请考生明确具体哪一处卡住再继续。"
+            "默认不讲代码具体怎么写。若考生明确指出某个变量、代码行或报错，"
+            "并问这一处怎么写或怎么调，可以就这一处给一个短的行内示例；"
+            "不要延伸到别处，不要提供完整函数、程序、整题伪代码或连续实现步骤。"
+            "如果考生泛泛索要完整答案，说明当前模式不能给完整解答，"
+            "只讲相关概念，并请其指出具体卡点。"
             "不要假装已经改过文件。"
         )
 
     answer_requirement = (
-        "使用中文，简洁直接；针对当前问题提供不超过 400 字的自然语言解释，"
-        "不提供可直接照写的实现语句。"
+        "使用中文，简洁直接；回答深度与考生当前问题一致，控制在 400 字左右。"
         if not can_edit_code(session.level) else
         "使用中文，简洁直接；可以提供具体代码与明确的修改建议。"
     )
@@ -342,10 +341,15 @@ def generate_events(session, provider=None, reviewer=None):
                 if tool_calls:
                     content = ""
                 elif reviewer and content:
+                    # Review exactly what a localized student would see, after
+                    # reducing a single-line fence to that one requested line.
+                    if (localized_request(question) and "```" in content
+                            and not scoped_violation(question, content)):
+                        content = sanitize_scoped_text(content, question)
                     round_usage = _empty_totals()
                     if usage_event:
                         _accumulate(round_usage, usage_event)
-                    for attempt in range(2):
+                    for attempt in range(3):
                         try:
                             verdict = reviewer.review(question, content)
                         except GuardError as exc:
@@ -363,10 +367,10 @@ def generate_events(session, provider=None, reviewer=None):
                                                   ensure_ascii=False),
                             )
                             attack_logged = True
-                        local_issue = conservative_violation(content)
+                        local_issue = scoped_violation(question, content)
                         if verdict["allowed"] and not local_issue:
                             break
-                        if attempt == 1:
+                        if attempt == 2:
                             content = ("在当前模式下，我无法提供具体代码实现。"
                                        "你可以询问本题的思路、概念或调试方向。")
                             break
@@ -374,8 +378,9 @@ def generate_events(session, provider=None, reviewer=None):
                             "role": "user", "content":
                             "上一版回答未通过审查。第一处问题：" +
                             (local_issue or verdict["feedback"]) +
-                            "。现在只用一段、不超过 200 字的自然语言重新回答原问题；"
-                            "只解释当前卡点，不列步骤、不写公式、代码或伪代码。",
+                            "。现在只用一段、不超过 200 字重新回答原问题；只解释当前卡点，"
+                            + ("最多给一处短行内示例，不扩展到完整解法。" if localized_request(question)
+                               else "不列步骤、不写公式、代码或伪代码。"),
                         }]
                         revised = []
                         retry_usage = None
@@ -400,7 +405,7 @@ def generate_events(session, provider=None, reviewer=None):
                         "cacheHitTokens": round_usage["cache_hit"],
                         "cacheMissTokens": round_usage["cache_miss"],
                     }
-                content = sanitize_advise_text(content)
+                content = sanitize_scoped_text(content, question)
                 if attack_logged and not tool_calls and content:
                     content += "\n\n当前请求包含试图改变考试 AI 规则的内容，相关对话已记录。"
                 if content:

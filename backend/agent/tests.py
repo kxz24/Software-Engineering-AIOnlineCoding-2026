@@ -6,7 +6,9 @@
 """
 from datetime import timedelta
 from unittest.mock import patch
+from io import StringIO
 
+from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -163,11 +165,20 @@ class AdviseGuardTests(SimpleTestCase):
         from .policy import scoped_violation
         self.assertTrue(scoped_violation("请写完整程序", "```python\nprint(1)\n```"))
 
+    def test_experiment_normalizes_one_requested_fenced_line(self):
+        from .policy import scoped_violation, sanitize_scoped_text
+        question = "values 这一行怎么改成快速输入？"
+        candidate = "只改这一行：\n```python\nvalues = list(map(int, sys.stdin.buffer.readline().split()))\n```"
+        self.assertFalse(scoped_violation(question, candidate))
+        self.assertEqual(sanitize_scoped_text(candidate, question),
+                         "`values = list(map(int, sys.stdin.buffer.readline().split()))`")
+        self.assertTrue(scoped_violation(question, "```python\na=1\nb=2\n```"))
+
     def test_help_report_accepts_observed_turns_only(self):
         from .report import build_help_report
         provider = RoundProvider([text_round(
-            '{"turns":[{"userSeq":1,"activity":"algorithm","helpLevel":1,'
-            '"evidence":"询问切分思路"}],"overview":"主要寻求算法思路",'
+            '{"turns":[{"userSeq":1,"activity":"algorithm","helpLevel":1,"receivedLevel":1,'
+            '"evidence":"切分思路"}],"overview":"主要寻求算法思路",'
             '"limitations":"仅根据对话，不能判断是否真正学会"}'
         )])
         result = build_help_report([
@@ -176,15 +187,28 @@ class AdviseGuardTests(SimpleTestCase):
         ], provider)
         self.assertEqual(result["turns"][0]["activity"], "algorithm")
         self.assertEqual(result["turns"][0]["helpLevel"], 1)
+        self.assertEqual(result["turns"][0]["receivedLevel"], 1)
 
     def test_help_report_rejects_fabricated_user_turn(self):
         from .report import ReportError, build_help_report
         provider = RoundProvider([text_round(
-            '{"turns":[{"userSeq":99,"activity":"coding","helpLevel":4,'
+            '{"turns":[{"userSeq":99,"activity":"coding","helpLevel":4,"receivedLevel":4,'
             '"evidence":"不存在"}],"overview":"","limitations":""}'
         )])
         with self.assertRaises(ReportError):
             build_help_report([{"seq": 1, "role": "user", "content": "你好"}], provider)
+
+    def test_help_report_evidence_must_quote_student_not_assistant(self):
+        from .report import ReportError, build_help_report
+        provider = RoundProvider([text_round(
+            '{"turns":[{"userSeq":1,"activity":"knowledge","helpLevel":1,'
+            '"receivedLevel":2,"evidence":"树状数组"}],"overview":"","limitations":""}'
+        )])
+        with self.assertRaises(ReportError):
+            build_help_report([
+                {"seq": 1, "role": "user", "content": "这题学什么？"},
+                {"seq": 2, "role": "assistant", "content": "先学树状数组。"},
+            ], provider)
 
 
 class AgentBaseTestCase(TestCase):
@@ -402,6 +426,35 @@ class SessionAndMessageTests(AgentBaseTestCase):
             role=AgentMessage.ROLE_ASSISTANT).first()
         self.assertEqual(persisted.content, "当左侧没有元素时，可以把它视为比任何数都小。")
 
+    def test_http_sse_allows_only_requested_single_line(self):
+        self.auth()
+        session_id = self.client.post(
+            "/api/v1/agent/sessions",
+            {"examId": self.exam.id, "problemId": self.problem.id}, format="json",
+        ).json()["sessionId"]
+        provider = RoundProvider([text_round(
+            "只改这一行：\n```python\nvalues = list(map(int, input().split()))\n```\n其他细节略。"
+        )])
+        reviewed = []
+        class Reviewer:
+            def review(self, question, answer):
+                reviewed.append(answer)
+                return {"allowed": True, "feedback": "", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+        with override_settings(AGENT_PROVIDER="deepseek"), \
+                patch.object(service, "get_provider", return_value=provider), \
+                patch.object(service, "configured_reviewer", return_value=Reviewer()):
+            response = self.client.post(
+                f"/api/v1/agent/sessions/{session_id}/messages",
+                {"content": "values 这一行怎么写？"}, format="json",
+                HTTP_ACCEPT="text/event-stream",
+            )
+            body = b"".join(response.streaming_content).decode("utf-8")
+        self.assertIn("`values = list(map(int, input().split()))`", body)
+        self.assertNotIn("其他细节", body)
+        self.assertNotIn("```", body)
+        self.assertEqual(reviewed, ["`values = list(map(int, input().split()))`"])
+
     def test_sse_accept_header(self):
         """浏览器带 Accept: text/event-stream 时不能被 DRF 协商成 406"""
         self.auth()
@@ -442,6 +495,21 @@ class SessionAndMessageTests(AgentBaseTestCase):
         self.auth(self.other_token)
         resp = self.client.get(f"/api/v1/agent/sessions/{session.id}/messages")
         self.assertEqual(resp.status_code, 404)
+
+
+class LojExperimentSeedTests(AgentBaseTestCase):
+    def test_loj_problem_is_real_sourced_and_seed_is_idempotent(self):
+        from app.management.commands.seed_loj_experiment import TITLE, EXAM_TITLE
+        User.objects.create(username="teacher", role=User.ROLE_TEACHER,
+                            nickname="实验教师", password="unused")
+        for _ in range(2):
+            call_command("seed_loj_experiment", stdout=StringIO())
+        problem = Problem.objects.get(title=TITLE)
+        self.assertIn("https://loj.ac/problem/132", problem.description)
+        self.assertEqual(problem.samples.count(), 2)
+        self.assertEqual(problem.samples.get(is_sample=True).expected_output,
+                         "15\n18\n6\n")
+        self.assertEqual(Exam.objects.filter(title=EXAM_TITLE).count(), 1)
 
 
 class ToolPermissionTests(AgentBaseTestCase):
@@ -498,7 +566,7 @@ class ToolPermissionTests(AgentBaseTestCase):
         self.assertIn("负无穷", streamed)
         self.assertEqual(provider.calls, 2)
 
-    def test_advise_falls_back_after_two_rejections(self):
+    def test_advise_falls_back_after_three_rejections(self):
         session = self.create_session()
         provider = RoundProvider([text_round("`answer = 42`"), text_round("`answer = 42`")])
         class Reviewer:
@@ -510,7 +578,7 @@ class ToolPermissionTests(AgentBaseTestCase):
         streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
         self.assertNotIn("answer =", streamed)
         self.assertIn("当前模式", streamed)
-        self.assertEqual(provider.calls, 2)
+        self.assertEqual(provider.calls, 3)
 
     def test_guard_failure_uses_safe_reply(self):
         session = self.create_session()
