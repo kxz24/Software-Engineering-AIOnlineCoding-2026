@@ -172,6 +172,7 @@ class AdviseGuardTests(SimpleTestCase):
         self.assertFalse(diagnostic_only_request(question + "该怎么修？"))
         self.assertTrue(scoped_violation(question, "文件顶部加一行：\nimport sys"))
         self.assertTrue(scoped_violation(question, "在文件顶部加上 `import sys`。"))
+        self.assertTrue(scoped_violation(question, "检查文件开头是否有 import sys，确认它在出错行之前。"))
         self.assertFalse(scoped_violation(question, "文件顶部没有导入 sys，所以运行到这一行时找不到这个名字。"))
 
     def test_experiment_accepts_explained_concept_without_code(self):

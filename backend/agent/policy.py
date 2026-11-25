@@ -30,6 +30,10 @@ _LONG_INLINE = re.compile(r"`([^`]{120,})`")
 _EXECUTABLE_INLINE = re.compile(
     r"`[^`\n]*(?:\b(?:if|for|while|return|print)\b|(?<![<>=!])=(?!=)|==|<=|>=|!=)[^`\n]*`"
 )
+_IMPORT_STATEMENT = re.compile(
+    r"\b(?:import\s+[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*|"
+    r"from\s+[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s+import\s+[A-Za-z_]\w*)\b"
+)
 
 
 def _looks_like_code(line):
@@ -140,6 +144,7 @@ def scoped_violation(question, text):
     if diagnostic_only_request(question):
         inline_code = re.findall(r"`([^`\n]+)`", text)
         if (_EXECUTABLE_INLINE.search(text)
+                or _IMPORT_STATEMENT.search(text)
                 or any(_looks_like_code(line) for line in text.splitlines())
                 or any(_looks_like_code(span) for span in inline_code)):
             return "学生只问报错原因；请定位原因，不主动给可照写的修复语句。"
