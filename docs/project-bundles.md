@@ -59,4 +59,4 @@ docker build -t aicoding-project-judge:latest -f backend/judge/ProjectDockerfile
 
 用户提供的 `archlab-handout.tar` 带有版权声明，示范包仅在本机生成，不随本分支提交。它放入六个公开待实现文件，并将原 handout、分项评分器和转换脚本放在 private。在线示例题采用纯自动 100 分：Part A 20、Part B 30、Part C 50；不设报告项。原课程作业的 75 分自动测试加 25 分报告规则仍保留在本地评分器的 `course` 模式，供原作业核对。示范包路径见本次任务工作目录中的 `archlab-project-demo.zip`。
 
-本机已构建上述 Docker 镜像，并使用真实无网络容器执行本地 Arch Lab 示范包与已完成的六文件快照。教师页上传、学生工作台及提交的接口/构建测试已通过；完整浏览器交互流程尚未做自动化验证。
+本机已构建上述 Docker 镜像，并使用真实无网络容器执行本地 Arch Lab 示范包与已完成的六文件快照，结果为 87.8/100、9 个自动评分项、无需人工复核，平均 CPE 8.41。教师页上传、学生工作台及提交的接口/构建测试已通过；完整浏览器交互流程尚未做自动化验证。
