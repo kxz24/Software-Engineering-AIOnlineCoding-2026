@@ -45,6 +45,7 @@ def problem_summary(problem):
         "outputLimitKb": problem.output_limit_kb,
         "sampleCount": problem.samples.filter(is_sample=True).count(),
         "hiddenCount": problem.samples.filter(is_sample=False).count(),
+        "hasProjectBundle": hasattr(problem, "project_bundle"),
         "updated": problem.updated,
     }
 
@@ -55,6 +56,7 @@ def problem_detail(problem):
         **problem_summary(problem),
         "description": problem.description,
         "starterCode": problem.starter_code,
+        "publicFiles": problem.project_bundle.public_files if hasattr(problem, "project_bundle") else None,
         "createdBy": problem.created_by.username if problem.created_by else "",
         "samples": [
             {

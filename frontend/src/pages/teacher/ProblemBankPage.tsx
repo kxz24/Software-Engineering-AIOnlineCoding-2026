@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { TeacherLayout } from "../../layouts/TeacherLayout";
 import { Icon } from "../../components/Icon";
 import { toast } from "../../components/Toast";
@@ -8,6 +8,7 @@ import {
     deleteProblem,
     fetchProblem,
     fetchProblems,
+    importProject,
     ProblemSummary,
     SamplePayload,
     updateProblem,
@@ -112,6 +113,7 @@ const SmallAreaStyle: React.CSSProperties = {
  * 隐藏测试仅用于判分；接口见 /api/v1/problems。
  */
 export function ProblemBankPage() {
+    const projectInput = useRef<HTMLInputElement>(null);
     const [problems, setProblems] = useState<ProblemSummary[]>([]);
     const [keyword, setKeyword] = useState("");
     const [loading, setLoading] = useState(true);
@@ -274,6 +276,18 @@ export function ProblemBankPage() {
                     </div>
                 </div>
                 <div className="page-actions">
+                    <input ref={projectInput} type="file" accept=".zip,application/zip" style={{ display: "none" }}
+                           onChange={event => {
+                               const file = event.target.files && event.target.files[0];
+                               if (!file) return;
+                               importProject(file)
+                                   .then(() => { toast("工程题已导入", "success"); loadProblems(keyword); })
+                                   .catch((e: ApiError) => setError(e.message));
+                               event.target.value = "";
+                           }}/>
+                    <button type="button" className="btn btn-secondary" onClick={() => projectInput.current?.click()}>
+                        导入工程题 ZIP
+                    </button>
                     <input className="input"
                            style={SmallInputStyle}
                            placeholder="搜索标题 / 题面"

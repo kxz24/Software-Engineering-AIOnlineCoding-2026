@@ -270,6 +270,7 @@ def _problem_for_student(item, best_score=0):
         "difficulty": problem.difficulty,
         "description": problem.description,
         "starterCode": problem.starter_code,
+        "publicFiles": problem.project_bundle.public_files if hasattr(problem, "project_bundle") else None,
         "samples": [
             {"name": s.name, "input": s.input_data, "expected": s.expected_output}
             for s in problem.samples.filter(is_sample=True)

@@ -204,6 +204,9 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 # 判题沙箱镜像（由 backend/judge/Dockerfile 构建）
 JUDGE_IMAGE = os.environ.get("JUDGE_IMAGE", "aicoding-judge:latest")
+PROJECT_JUDGE_RUNTIMES = {"build-tools": os.environ.get(
+    "PROJECT_JUDGE_IMAGE", "aicoding-project-judge:latest"
+)}
 # 测试环境可关掉入队，避免依赖 Redis
 JUDGE_ENQUEUE_ENABLED = os.environ.get("JUDGE_ENQUEUE_ENABLED", "1") == "1"
 # 单次判题的整体墙钟上限（秒），需小于 CELERY_TASK_TIME_LIMIT

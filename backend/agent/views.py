@@ -301,6 +301,12 @@ class AgentMessageCreateView(APIView):
         # 同步前端当前代码到服务端工作区（三级模式下不覆盖较新的 AI 写入）
         active_file = str(content.get("activeFile") or "").strip()
         code = content.get("code")
+        project_paths = None
+        if hasattr(session.problem, "project_bundle"):
+            project_paths = {f"p{session.problem_id}/{name}" for name in
+                             session.problem.project_bundle.public_files}
+            if active_file and active_file not in project_paths:
+                return Response({"message": "工作区文件路径无效"}, status=400)
         if active_file and isinstance(code, str):
             revision = content.get("workspaceRevision")
             try:
@@ -312,6 +318,19 @@ class AgentMessageCreateView(APIView):
             except ValueError as exc:
                 return Response({"message": str(exc)},
                                 status=status.HTTP_400_BAD_REQUEST)
+
+        if project_paths is not None:
+            files = content.get("workspaceFiles") or {}
+            revisions = content.get("workspaceRevisions") or {}
+            if not isinstance(files, dict) or not isinstance(revisions, dict) or set(files) - project_paths:
+                return Response({"message": "工作区文件列表无效"}, status=400)
+            for path, body in files.items():
+                if not isinstance(body, str):
+                    return Response({"message": "工作区文件内容无效"}, status=400)
+                revision = revisions.get(path)
+                if revision is not None and type(revision) is not int:
+                    return Response({"message": "工作区版本号无效"}, status=400)
+                ensure_workspace(session, path, body, expected_revision=revision)
 
         user_message = service.add_user_message(session, text)
 

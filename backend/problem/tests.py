@@ -1,9 +1,16 @@
 from django.test import TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from io import BytesIO
+import json
+import zipfile
 from rest_framework.test import APIClient
 
 from user.controllers import create_user
 from user.models import User
 from utils.jwt import encrypt_password
+from exam.controllers import _problem_for_student
+from exam.models import ExamProblem
+from problem.models import Problem
 
 # 题库接口测试。跨 app 的流程（如组卷）后续放在根目录 test 文件夹
 
@@ -243,3 +250,41 @@ class ProblemCRUDTestCase(TestCase):
         resp = self.client.get("/api/v1/problems", {"type": "algorithm"})
         titles = [item["title"] for item in resp.json()["problems"]]
         self.assertEqual(titles, ["两数之和"])
+
+
+class ProjectImportTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        create_user(username="teacher_import", password=encrypt_password("secret6"),
+                    nickname="教师", role=User.ROLE_TEACHER)
+        token = login_token(self.client, "teacher_import", "secret6")
+        self.client.credentials(**auth_header(token))
+
+    @staticmethod
+    def package(public_name="src/main.c"):
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("project.json", json.dumps({
+                "title": "Example project", "description": "Complete the project",
+                "runtime": "build-tools", "graderCommand": ["python3", "private/grade.py"],
+            }))
+            archive.writestr(f"public/{public_name}", "int main(void) { return 0; }")
+            archive.writestr("private/grade.py", "# hidden grader")
+        return SimpleUploadedFile("project.zip", buffer.getvalue(), content_type="application/zip")
+
+    def test_teacher_import_and_student_projection(self):
+        response = self.client.post("/api/v1/problems/import-project", {"file": self.package()})
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["publicFiles"]["src/main.c"], "int main(void) { return 0; }")
+        problem = Problem.objects.get(pk=response.json()["id"])
+        student = _problem_for_student(ExamProblem(problem=problem))
+        self.assertEqual(student["publicFiles"], {"src/main.c": "int main(void) { return 0; }"})
+        self.assertNotIn("graderCommand", student)
+        self.assertNotIn("hidden grader", json.dumps(student))
+
+    def test_reject_path_traversal(self):
+        response = self.client.post(
+            "/api/v1/problems/import-project", {"file": self.package("../escape.c")}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Problem.objects.count(), 0)

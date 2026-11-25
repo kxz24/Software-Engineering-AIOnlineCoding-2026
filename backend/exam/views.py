@@ -4,6 +4,7 @@ from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from problem.models import Problem
 
 from user.models import User
 from utils.jwt import login_required, role_required
@@ -370,11 +371,28 @@ class MySubmissionView(APIView):
         if not ok:
             return Response({"message": "考试不存在"}, status=status.HTTP_404_NOT_FOUND)
         content = request.data or {}
-        code = str(content.get("code") or "")
-        if not code.strip():
-            return Response({"message": "代码不能为空"}, status=status.HTTP_400_BAD_REQUEST)
-        if len(code) > 200_000:
-            return Response({"message": "代码过长（上限 200 KB）"}, status=status.HTTP_400_BAD_REQUEST)
+        problem = Problem.objects.filter(pk=kwargs.get("problem_id")).first()
+        if problem and hasattr(problem, "project_bundle"):
+            files = content.get("files")
+            if not isinstance(files, dict) or not files or len(files) > 100:
+                return Response({"message": "工程题需要提交文件对象（上限 100 个）"}, status=400)
+            from problem.project_package import ProjectPackageError, safe_name
+            import json
+            try:
+                for path, value in files.items():
+                    if (not isinstance(path, str) or safe_name(path) != path or
+                            path.startswith("private/") or not isinstance(value, str) or
+                            len(path) > 128):
+                        raise ProjectPackageError("提交文件路径或内容无效")
+            except ProjectPackageError as exc:
+                return Response({"message": str(exc)}, status=400)
+            code = json.dumps({"files": files}, ensure_ascii=False)
+        else:
+            code = str(content.get("code") or "")
+            if not code.strip():
+                return Response({"message": "代码不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+        if len(code.encode("utf-8")) > 200_000:
+            return Response({"message": "代码过长（上限 200 KB）"}, status=400)
 
         submission, code_status, ok = controllers.create_submission(
             request.user, exam, kwargs.get("problem_id"), code,

@@ -339,6 +339,7 @@ export interface SamplePayload {
 export interface ProblemDetail extends ProblemSummary {
     description: string;
     starterCode: string;
+    publicFiles?: Record<string, string> | null;
     createdBy: string;
     samples: (SamplePayload & { id: number })[];
 }
@@ -359,6 +360,25 @@ export function fetchProblems(query: ProblemListQuery = {}): Promise<{ problems:
 /** 题目详情 */
 export function fetchProblem(problemId: number): Promise<ProblemDetail> {
     return request(Urls.problemDetail(problemId));
+}
+
+/** 上传工程题包；题目说明与初始文件由 ZIP 内 project.json/public/ 提供。 */
+export async function importProject(file: File): Promise<ProblemDetail> {
+    const body = new FormData();
+    body.append("file", file);
+    let response: Response;
+    try {
+        response = await fetch(Urls.projectImport, {
+            method: "POST", headers: { Authorization: getToken() || "" }, body,
+        });
+    } catch (e) {
+        throw new ApiError(NetworkErrorMessage, 0);
+    }
+    const json = await readJson(response);
+    if (!response.ok) {
+        throw new ApiError(json.message || "导入失败", response.status);
+    }
+    return json as ProblemDetail;
 }
 
 /** 创建题目（可携带用例） */
@@ -573,6 +593,7 @@ export interface StudentProblem {
     difficulty: string;
     description: string;
     starterCode: string;
+    publicFiles?: Record<string, string> | null;
     samples: StudentSample[];
 }
 
@@ -664,11 +685,12 @@ export function submitCode(
     examId: number,
     problemId: number,
     code: string,
-    language?: string
+      language?: string,
+      files?: Record<string, string>
 ): Promise<{ submission: { id: number; problemId: number; status: string; created: string }; used: number; remaining: number }> {
     return request(Urls.mySubmission(examId, problemId), {
         method: "POST",
-        body: { code, language },
+          body: files ? { files, language } : { code, language },
     });
 }
 

@@ -1,4 +1,6 @@
 from drf_spectacular.utils import OpenApiResponse, extend_schema
+from django.conf import settings
+from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -7,7 +9,8 @@ from user.models import User
 from utils.jwt import role_required
 
 from . import controllers
-from .models import Problem
+from .models import Problem, ProjectBundle
+from .project_package import ProjectPackageError, parse_package, MAX_ARCHIVE_BYTES
 
 
 def _validate_fields(content, partial=False):
@@ -313,3 +316,37 @@ class ProblemDetailView(APIView):
                 {"message": "删除失败，请稍后重试"}, status=status.HTTP_400_BAD_REQUEST
             )
         return Response({"message": "ok"}, status=status.HTTP_200_OK)
+
+
+class ProjectImportView(APIView):
+    """Import a teacher-authored engineering ZIP; keep private grader data server-side."""
+
+    @role_required(User.ROLE_ADMIN, User.ROLE_TEACHER)
+    def post(self, request, *args, **kwargs):
+        uploaded = request.FILES.get("file")
+        if uploaded is None or uploaded.size > MAX_ARCHIVE_BYTES:
+            return Response({"message": "请上传不超过 8 MB 的工程题 ZIP"}, status=400)
+        try:
+            raw = uploaded.read(MAX_ARCHIVE_BYTES + 1)
+            metadata, public = parse_package(raw)
+        except ProjectPackageError as exc:
+            return Response({"message": str(exc)}, status=400)
+        if metadata["runtime"] not in settings.PROJECT_JUDGE_RUNTIMES:
+            return Response({"message": "runtime 未由管理员配置"}, status=400)
+        if metadata["difficulty"] not in dict(Problem.DIFFICULTY_CHOICES):
+            return Response({"message": "difficulty 无效"}, status=400)
+        if metadata["language"] not in dict(Problem.LANGUAGE_CHOICES):
+            return Response({"message": "language 无效"}, status=400)
+        with transaction.atomic():
+            problem = Problem.objects.create(
+                title=metadata["title"], description=metadata["description"],
+                type=Problem.TYPE_ENGINEERING, difficulty=metadata["difficulty"],
+                language=metadata["language"], created_by=request.user,
+            )
+            ProjectBundle.objects.create(
+                problem=problem, archive=raw, public_files=public,
+                runtime=metadata["runtime"],
+                grader_command=metadata["grader_command"],
+                max_score=metadata["max_score"],
+            )
+        return Response(controllers.problem_detail(problem), status=201)

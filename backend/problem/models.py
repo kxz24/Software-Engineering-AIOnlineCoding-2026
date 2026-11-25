@@ -107,3 +107,16 @@ class TestSample(models.Model):
 
     def __str__(self):
         return f"{self.problem.title} · {self.name}"
+
+
+class ProjectBundle(models.Model):
+    """Teacher-owned engineering package. Private grader files never enter student APIs."""
+
+    problem = models.OneToOneField(
+        Problem, on_delete=models.CASCADE, related_name="project_bundle"
+    )
+    archive = models.BinaryField()
+    public_files = models.JSONField(default=dict)
+    runtime = models.CharField(max_length=64)
+    grader_command = models.JSONField(default=list)
+    max_score = models.PositiveIntegerField(default=100)

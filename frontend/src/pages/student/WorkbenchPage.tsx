@@ -57,6 +57,15 @@ function problemPath(problem: StudentProblem): string {
     return `p${problem.order + 1}_${slug}.${extension}`;
 }
 
+function filesForProblem(problem: StudentProblem): { label: string; path: string; content: string }[] {
+    if (problem.publicFiles) {
+        return Object.entries(problem.publicFiles).map(([label, content]) => ({
+            label, path: `p${problem.problemId}/${label}`, content,
+        }));
+    }
+    return [{ label: problemPath(problem), path: problemPath(problem), content: problem.starterCode || "" }];
+}
+
 /** ISO 时间 → HH:MM:SS（时间线 / 提交记录用） */
 function timeOf(iso: string): string {
     const date = new Date(iso);
@@ -244,6 +253,7 @@ export function WorkbenchPage() {
     const draftKey = `workbench-draft-${examId}`;
     const [savedDraft] = useState(() => loadDraft(draftKey));
     const [contents, setContents] = useState<Record<string, string>>({});
+    const [selectedProjectFile, setSelectedProjectFile] = useState<Record<number, string>>({});
     const [modified, setModified] = useState<Record<string, boolean>>({});
     /** 各文件显式选择过的语言（'' / 缺省 = 按扩展名自动推断） */
     const [languages, setLanguages] = useState<Record<string, string>>(() => ({
@@ -262,10 +272,11 @@ export function WorkbenchPage() {
         setContents(current => {
             const next = { ...current };
             detail.problems.forEach(item => {
-                const path = problemPath(item);
-                if (next[path] == null) {
-                    next[path] = (savedDraft && savedDraft.contents[path]) || item.starterCode || "";
-                }
+                filesForProblem(item).forEach(file => {
+                    if (next[file.path] == null) {
+                        next[file.path] = savedDraft?.contents[file.path] ?? file.content;
+                    }
+                });
             });
             return next;
         });
@@ -275,9 +286,12 @@ export function WorkbenchPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [detail]);
 
-    const currentPath = problem ? problemPath(problem) : "";
+    const currentPath = problem ? (
+        selectedProjectFile[problem.problemId] || filesForProblem(problem)[0]?.path || ""
+    ) : "";
     const currentLanguage = (currentPath && languages[currentPath]) ||
-        (problem ? (LanguageExtensions[problem.language] ? problem.language : languageForPath(currentPath)) : "plaintext");
+        (problem ? (problem.publicFiles ? languageForPath(currentPath) :
+            (LanguageExtensions[problem.language] ? problem.language : languageForPath(currentPath))) : "plaintext");
 
     /** 把当前工作区写入本地草稿（自动保存与手动保存共用） */
     const writeDraft = () => {
@@ -361,12 +375,15 @@ export function WorkbenchPage() {
         if (!files.length) {
             return;
         }
-        const changed = files.some(file => contents[file.path] !== file.content);
+        const changed = files.some(file => contents[file.path] !== file.content &&
+            !(problem?.publicFiles && file.revision === 1 && contents[file.path] != null));
         if (changed) {
             setContents(current => {
                 const next = { ...current };
                 files.forEach(file => {
-                    next[file.path] = file.content;
+                    if (!(problem?.publicFiles && file.revision === 1 && next[file.path] != null)) {
+                        next[file.path] = file.content;
+                    }
                 });
                 return next;
             });
@@ -569,6 +586,10 @@ export function WorkbenchPage() {
             activeFile: currentPath,
             code: currentCode,
             workspaceRevision: currentPath ? agentRevisions[currentPath] : undefined,
+            workspaceFiles: problem?.publicFiles ? Object.fromEntries(
+                filesForProblem(problem).map(file => [file.path, contents[file.path] ?? file.content])
+            ) : undefined,
+            workspaceRevisions: problem?.publicFiles ? agentRevisions : undefined,
             clientMessageId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         }, handleEvent, controller.signal)
             .then(() => {
@@ -645,7 +666,10 @@ export function WorkbenchPage() {
             return;
         }
         setSubmitting(true);
-        submitCode(detail.id, problem.problemId, currentCode, problem.language)
+        const projectFiles = problem.publicFiles ? Object.fromEntries(
+            Object.keys(problem.publicFiles).map(name => [name, contents[`p${problem.problemId}/${name}`] ?? ""])
+        ) : undefined;
+        submitCode(detail.id, problem.problemId, currentCode, problem.language, projectFiles)
             .then(result => {
                 setSubmitting(false);
                 setSubmissions(current => [
@@ -813,19 +837,21 @@ export function WorkbenchPage() {
                         </div>
                         <div className="section-label">{detail.course || "EXAM"}</div>
                         <div className="tree">
-                            {problems.map(item => {
-                                const path = problemPath(item);
-                                const isActive = !!problem && item.problemId === problem.problemId;
+                            {problems.map(item => filesForProblem(item).map(file => {
+                                const isActive = !!problem && item.problemId === problem.problemId && currentPath === file.path;
                                 return (
-                                    <div key={item.problemId}
+                                    <div key={file.path}
                                          className={"tree-row lv1" + (isActive ? " active" : "")}
-                                         onClick={() => setCurrentProblemId(item.problemId)}>
+                                         onClick={() => {
+                                             setCurrentProblemId(item.problemId);
+                                             setSelectedProjectFile(current => ({ ...current, [item.problemId]: file.path }));
+                                         }}>
                                         <Icon name="file" size={13} strokeWidth={1.7} className="file-ico"/>
-                                        <span>{path}</span>
-                                        {modified[path] && <span className="modified-dot"/>}
+                                        <span>{file.label}</span>
+                                        {modified[file.path] && <span className="modified-dot"/>}
                                     </div>
                                 );
-                            })}
+                            }))}
                             {problems.length === 0 && (
                                 <div className="tree-row lv1 muted">本场考试没有题目</div>
                             )}

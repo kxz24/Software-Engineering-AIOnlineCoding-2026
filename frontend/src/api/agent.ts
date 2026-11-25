@@ -256,6 +256,8 @@ export async function streamAgentMessage(
         activeFile?: string;
         code?: string;
         workspaceRevision?: number;
+        workspaceFiles?: Record<string, string>;
+        workspaceRevisions?: Record<string, number>;
         clientMessageId?: string;
     },
     onEvent: (event: AgentStreamEvent) => void,

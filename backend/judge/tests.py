@@ -25,7 +25,7 @@ from judge.languages import LANGUAGES, normalize_language, run_command
 from judge.sandbox import CaseSpec, SandboxResult, _build_tar
 from judge.scoring import summarize
 from judge.tasks import judge_submission
-from problem.models import Problem, TestSample
+from problem.models import Problem, ProjectBundle, TestSample
 from user.models import User
 from utils.jwt import encrypt_password
 
@@ -184,6 +184,29 @@ class JudgeTaskTests(TestCase):
         self.submission.refresh_from_db()
         self.assertEqual(self.submission.verdict, VERDICT_PARTIAL)
         self.assertEqual(self.submission.score, 50)
+
+    def test_project_snapshot_scoring_and_private_feedback(self):
+        self.problem.type = Problem.TYPE_ENGINEERING
+        self.problem.save(update_fields=["type"])
+        ProjectBundle.objects.create(
+            problem=self.problem, archive=b"example", public_files={"src/main.c": "starter"},
+            runtime="build-tools", grader_command=["python3", "private/grade.py"], max_score=100,
+        )
+        self.submission.code = json.dumps({"files": {"src/main.c": "answer"}})
+        self.submission.save(update_fields=["code"])
+        result = {"score": 65.85, "maxScore": 100, "needsReview": True, "items": [
+            {"name": "public check", "score": 5, "maxScore": 5, "visible": True},
+            {"name": "secret check", "score": 0, "maxScore": 5, "visible": False},
+        ]}
+        with mock.patch("judge.tasks.run_project_sandbox", return_value=result) as sandbox:
+            judge_submission(self.submission.id)
+        self.assertEqual(sandbox.call_args.args[1], {"src/main.c": "answer"})
+        self.submission.refresh_from_db()
+        self.assertEqual(self.submission.score, 66)
+        self.assertEqual(self.submission.verdict, VERDICT_PARTIAL)
+        self.assertTrue(self.submission.needs_review)
+        self.assertEqual(list(self.submission.cases.values_list("name", flat=True)),
+                         ["public check", "隐藏评分项 #2"])
 
     def test_task_idempotent(self):
         with mock.patch("judge.tasks.run_sandbox", return_value=self._result(
