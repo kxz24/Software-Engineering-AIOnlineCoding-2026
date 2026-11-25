@@ -165,6 +165,24 @@ class AdviseGuardTests(SimpleTestCase):
         from .policy import scoped_violation
         self.assertTrue(scoped_violation("请写完整程序", "```python\nprint(1)\n```"))
 
+    def test_diagnosis_question_does_not_authorize_a_fix_line(self):
+        from .policy import diagnostic_only_request, scoped_violation
+        question = "NameError: name 'sys' is not defined，这是哪里出错了？"
+        self.assertTrue(diagnostic_only_request(question))
+        self.assertFalse(diagnostic_only_request(question + "该怎么修？"))
+        self.assertTrue(scoped_violation(question, "文件顶部加一行：\nimport sys"))
+        self.assertTrue(scoped_violation(question, "在文件顶部加上 `import sys`。"))
+        self.assertFalse(scoped_violation(question, "文件顶部没有导入 sys，所以运行到这一行时找不到这个名字。"))
+
+    def test_experiment_accepts_explained_concept_without_code(self):
+        from .policy import scoped_violation
+        explanation = ("差分记录相邻两个位置之间的变化。比如原序列有三个数 2、5、5，"
+                       "相邻变化分别是增加 3、增加 0。给后两个数都加 4 时，"
+                       "它们之间的差没有变，只有这一段的两个边界发生变化。") * 6
+        self.assertGreater(len(explanation), 450)
+        self.assertFalse(scoped_violation("我没学过差分，它是什么？", explanation))
+        self.assertTrue(scoped_violation("我没学过差分，它是什么？", "`d[l] += x`"))
+
     def test_experiment_normalizes_one_requested_fenced_line(self):
         from .policy import scoped_violation, sanitize_scoped_text
         question = "values 这一行怎么改成快速输入？"
@@ -509,9 +527,11 @@ class ToolPermissionTests(AgentBaseTestCase):
     def test_limited_prompt_tracks_requested_depth(self):
         session = self.create_session()
         prompt = service.build_messages(session)[0]["content"]
-        self.assertIn("只回答考生当前所问", prompt)
-        self.assertIn("具体哪一处", prompt)
-        self.assertIn("简单问题更短", prompt)
+        self.assertIn("先正面回答当前问题", prompt)
+        self.assertIn("具体卡点", prompt)
+        self.assertIn("考生无需在问题里写", prompt)
+        self.assertIn("必要时用一个很小的数字例子", prompt)
+        self.assertIn("用两三句话指出原因和检查位置", prompt)
         self.assertNotIn("给出可运行的完整片段", prompt)
 
     def test_advise_redacts_complete_code(self):
@@ -551,7 +571,40 @@ class ToolPermissionTests(AgentBaseTestCase):
         self.assertNotIn("leftA =", streamed)
         self.assertIn("负无穷", streamed)
         self.assertEqual(provider.calls, 2)
-        self.assertIn("只保留本轮所问的内容", provider.requests[1][-1]["content"])
+        self.assertIn("先把问题讲明白", provider.requests[1][-1]["content"])
+
+    def test_natural_concept_question_keeps_useful_explanation(self):
+        session = self.create_session()
+        service.add_user_message(session, "我没学过差分，它到底是什么？")
+        answer = ("差分记录相邻位置的变化。比如原序列是 2、5、5，那么变化分别是增加 3、增加 0。"
+                  "一段连续的数字一起加上同一个数时，它们内部相邻的差不会变；"
+                  "这让我们能从变化的角度理解这道题。") * 6
+        class Reviewer:
+            def review(self, question, candidate):
+                return {"allowed": True, "feedback": "", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+        events = list(service.generate_events(
+            session, provider=RoundProvider([text_round(answer)]), reviewer=Reviewer()))
+        streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
+        self.assertGreater(len(answer), 450)
+        self.assertEqual(streamed, answer)
+
+    def test_diagnosis_reply_is_revised_before_streaming(self):
+        session = self.create_session()
+        service.add_user_message(session, "NameError: name 'sys' is not defined，这是哪里出错了？")
+        provider = RoundProvider([
+            text_round("文件顶部加一行：\nimport sys"),
+            text_round("文件顶部没有导入 sys，所以执行到这里时找不到这个名字。"),
+        ])
+        class Reviewer:
+            def review(self, question, candidate):
+                return {"allowed": True, "feedback": "", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+        events = list(service.generate_events(session, provider=provider, reviewer=Reviewer()))
+        streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
+        self.assertNotIn("加一行", streamed)
+        self.assertIn("没有导入 sys", streamed)
+        self.assertEqual(provider.calls, 2)
 
     def test_advise_falls_back_after_three_rejections(self):
         session = self.create_session()
@@ -578,6 +631,24 @@ class ToolPermissionTests(AgentBaseTestCase):
         streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
         self.assertNotIn("x =", streamed)
         self.assertIn("当前模式", streamed)
+
+    def test_guard_recovers_from_one_failed_review_call(self):
+        session = self.create_session()
+        class Reviewer:
+            calls = 0
+            def review(self, question, answer):
+                self.calls += 1
+                if self.calls == 1:
+                    raise GuardError("temporary gateway error")
+                return {"allowed": True, "feedback": "", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+        reviewer = Reviewer()
+        events = list(service.generate_events(
+            session, provider=RoundProvider([text_round("差分记录相邻位置的变化。")]),
+            reviewer=reviewer))
+        streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
+        self.assertEqual(reviewer.calls, 2)
+        self.assertEqual(streamed, "差分记录相邻位置的变化。")
 
     def test_approved_but_overlong_solution_is_still_blocked(self):
         session = self.create_session()

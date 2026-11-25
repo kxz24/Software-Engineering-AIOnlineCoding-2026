@@ -111,6 +111,13 @@ def localized_request(question):
     return bool(_LOCAL_REQUEST.search(str(question or "")))
 
 
+def diagnostic_only_request(question):
+    """A located error question asking for cause, without requesting a fix."""
+    question = str(question or "")
+    return (bool(re.search(r"哪里出错|哪里错|什么原因|为什么报错|报错是什么意思|为何报错", question))
+            and not bool(re.search(r"(?:怎么|如何)(?:修|改|解决|处理|写|调)|修复|修正|改成", question)))
+
+
 def _single_fenced_line(text):
     matches = list(_FENCED.finditer(text))
     if len(matches) != 1:
@@ -128,8 +135,14 @@ def _single_fenced_line(text):
 def scoped_violation(question, text):
     """Experimental mode: allow one local line only when explicitly requested."""
     text = str(text or "")
-    if len(text) > 450:
-        return "回答超出当前问题的范围；请控制在 400 字左右。"
+    if len(text) > 750:
+        return "回答过长；只解释当前问题，概念题最多用一个小例子。"
+    if diagnostic_only_request(question):
+        inline_code = re.findall(r"`([^`\n]+)`", text)
+        if (_EXECUTABLE_INLINE.search(text)
+                or any(_looks_like_code(line) for line in text.splitlines())
+                or any(_looks_like_code(span) for span in inline_code)):
+            return "学生只问报错原因；请定位原因，不主动给可照写的修复语句。"
     if _FENCED.search(text) or text.count("```") % 2:
         if not localized_request(question) or not _single_fenced_line(text):
             return "不能给完整代码块；只回答学生指出的局部问题。"
