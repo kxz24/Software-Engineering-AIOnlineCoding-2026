@@ -11,11 +11,13 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Sum
 from django.utils import timezone
+from user.models import AuditLog
 
 from . import tools
+from .guard import GuardError, configured_reviewer
 from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level
 from .models import AgentMessage, AgentSession
-from .policy import sanitize_advise_text
+from .policy import conservative_violation, sanitize_advise_text
 from .providers import ProviderError, get_provider, provider_info
 
 logger = logging.getLogger(__name__)
@@ -168,6 +170,8 @@ def _system_prompt(session):
         ability = (
             "你只能用自然语言解释本题思路、检查点和调试方向，不能修改工作区。"
             "只回答考生当前所问，不主动给下一步的实现细节。"
+            "每次回复尽量控制在 400 字以内；若提问很宽泛，只讲一个核心概念，"
+            "请考生明确卡住的地方再继续。"
             "不得输出可直接使用的代码语句、赋值式、条件式、循环或完整解法；"
             "也不要用伪代码、逐步实现清单或分散的行内片段拼出完整解法。"
             "可以用短的行内名称提及 API、变量或概念，但不要写可执行表达式。"
@@ -177,7 +181,7 @@ def _system_prompt(session):
         )
 
     answer_requirement = (
-        "使用中文，简洁直接；针对当前问题提供必要的自然语言解释，"
+        "使用中文，简洁直接；针对当前问题提供不超过 400 字的自然语言解释，"
         "不提供可直接照写的实现语句。"
         if not can_edit_code(session.level) else
         "使用中文，简洁直接；可以提供具体代码与明确的修改建议。"
@@ -277,7 +281,7 @@ def _accumulate(totals, usage_event):
     totals["cache_miss"] += int(usage_event.get("cacheMissTokens") or 0)
 
 
-def generate_events(session, provider=None):
+def generate_events(session, provider=None, reviewer=None):
     """
     生成一次 AI 回复的事件流（同步生成器）。
 
@@ -306,6 +310,12 @@ def generate_events(session, provider=None):
     tool_context = tools.ToolContext(session, emit)
     # 二级会话在服务端过滤完整代码，不能只依赖提示词
     redact_code = not can_edit_code(session.level)
+    if redact_code and reviewer is None and getattr(settings, "AGENT_GUARD_ENABLED", True):
+        if getattr(settings, "AGENT_PROVIDER", "mock") == "deepseek":
+            reviewer = configured_reviewer()
+    question = (session.messages.filter(role=AgentMessage.ROLE_USER)
+                .order_by("-seq").values_list("content", flat=True).first() or "")
+    attack_logged = False
 
     try:
         for _round in range(max_rounds):
@@ -328,7 +338,71 @@ def generate_events(session, provider=None):
 
             content = "".join(text_parts)
             if redact_code:
+                # A tool-call round may contain unreviewed commentary. Keep it internal.
+                if tool_calls:
+                    content = ""
+                elif reviewer and content:
+                    round_usage = _empty_totals()
+                    if usage_event:
+                        _accumulate(round_usage, usage_event)
+                    for attempt in range(2):
+                        try:
+                            verdict = reviewer.review(question, content)
+                        except GuardError as exc:
+                            logger.warning("审查失败 session=%s: %s", session.id, exc)
+                            content = "在当前模式下，我无法确认这条回答符合考试规则。请尝试重新提问思路或调试现象。"
+                            break
+                        if verdict.get("usage"):
+                            _accumulate(round_usage, verdict["usage"])
+                        if (verdict.get("user_attack") and verdict.get("attack_evidence")
+                                and not attack_logged):
+                            AuditLog.objects.create(
+                                user=session.student, action="agent_prompt_attack_suspected",
+                                detail=json.dumps({"sessionId": session.id,
+                                                   "evidence": verdict["attack_evidence"]},
+                                                  ensure_ascii=False),
+                            )
+                            attack_logged = True
+                        local_issue = conservative_violation(content)
+                        if verdict["allowed"] and not local_issue:
+                            break
+                        if attempt == 1:
+                            content = ("在当前模式下，我无法提供具体代码实现。"
+                                       "你可以询问本题的思路、概念或调试方向。")
+                            break
+                        retry_context = context + [{
+                            "role": "user", "content":
+                            "上一版回答未通过审查。第一处问题：" +
+                            (local_issue or verdict["feedback"]) +
+                            "。现在只用一段、不超过 200 字的自然语言重新回答原问题；"
+                            "只解释当前卡点，不列步骤、不写公式、代码或伪代码。",
+                        }]
+                        revised = []
+                        retry_usage = None
+                        try:
+                            for retry_event in provider.stream(
+                                    retry_context, [], max_tokens=min(max_tokens, 1024)):
+                                if retry_event["type"] == "delta":
+                                    revised.append(retry_event["text"])
+                                elif retry_event["type"] == "usage":
+                                    retry_usage = retry_event
+                        except ProviderError as exc:
+                            logger.warning("整改生成失败 session=%s: %s", session.id, exc)
+                            content = ("在当前模式下，我无法提供具体代码实现。"
+                                       "你可以询问本题的思路、概念或调试方向。")
+                            break
+                        content = "".join(revised)
+                        if retry_usage:
+                            _accumulate(round_usage, retry_usage)
+                    usage_event = {
+                        "inputTokens": round_usage["input"],
+                        "outputTokens": round_usage["output"],
+                        "cacheHitTokens": round_usage["cache_hit"],
+                        "cacheMissTokens": round_usage["cache_miss"],
+                    }
                 content = sanitize_advise_text(content)
+                if attack_logged and not tool_calls and content:
+                    content += "\n\n当前请求包含试图改变考试 AI 规则的内容，相关对话已记录。"
                 if content:
                     yield {"type": "delta", "text": content}
             assistant_calls = _assistant_tool_calls(tool_calls)

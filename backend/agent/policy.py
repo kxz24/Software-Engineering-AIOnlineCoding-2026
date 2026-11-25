@@ -7,7 +7,7 @@
   * 连续 3 行以上看起来像代码的内容整体替换为提示语；
   * 过长的行内代码（>= 120 字符）替换为提示语。
 
-允许保留行内短代码（如 `input()`、`sort`），它们通常用于说明 API 或定位问题。
+只保留不构成实现语句的短 API / 变量名称（如 `input()`、`sort`）。
 """
 import re
 
@@ -26,6 +26,9 @@ _CODE_LINE = re.compile(
 )
 
 _LONG_INLINE = re.compile(r"`([^`]{120,})`")
+_EXECUTABLE_INLINE = re.compile(
+    r"`[^`\n]*(?:\b(?:if|for|while|return|print)\b|(?<![<>=!])=(?!=)|==|<=|>=|!=)[^`\n]*`"
+)
 
 
 def _looks_like_code(line):
@@ -77,5 +80,20 @@ def sanitize_advise_text(text):
 
     text = _FENCED.sub(CODE_BLOCK_PLACEHOLDER, text)
     text = _LONG_INLINE.sub(CODE_BLOCK_PLACEHOLDER, text)
+    text = _EXECUTABLE_INLINE.sub(CODE_BLOCK_PLACEHOLDER, text)
     text = _strip_code_runs(text)
     return text.strip()
+
+
+def conservative_violation(text):
+    """Cheap, deterministic backstop for obvious implementation leakage."""
+    text = str(text or "")
+    if _FENCED.search(text) or text.count("```") % 2:
+        return "候选回答包含代码块；请只用自然语言说明概念。"
+    if _EXECUTABLE_INLINE.search(text):
+        return "候选回答包含可直接照写的行内语句；请删去表达式。"
+    if sanitize_advise_text(text) != text.strip():
+        return "候选回答包含可执行代码；请改为自然语言。"
+    if len(text) > 450:
+        return "回答过长，可能已经把整题实现步骤讲完；只回答当前问题，控制在 400 字左右。"
+    return ""

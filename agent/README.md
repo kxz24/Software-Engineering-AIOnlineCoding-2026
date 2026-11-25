@@ -21,7 +21,7 @@
 | `ai_mode` | 级别 | AI 能做什么 | 服务端提供的工具 | 前端表现 |
 | --- | --- | --- | --- | --- |
 | `closed` | 一级 无 AI | 不能发起模型请求 | 无 | Agent 面板禁用 / 隐藏，接口 403 |
-| `limited` | 二级 建议 | 读题面、读当前代码、查提交记录、跑**公开样例**、分析 bug、给思路与行级提示；**服务端过滤完整代码** | `get_problem`、`read_workspace`、`list_submissions`、`run_sample_tests` | 只读对话；代码块会被替换为提示语，没有「应用」按钮 |
+| `limited` | 二级 建议 | 读题面、读当前代码、查提交记录、跑**公开样例**；用自然语言回答当前所问的思路、概念与调试方向，不给可直接照写的实现语句或完整步骤 | `list_files`、`get_problem`、`read_workspace`、`list_submissions`、`run_sample_tests` | 只读对话；回复经审查后展示，没有「应用」按钮 |
 | `open` | 三级 协作 | 在二级能力上直接修改工作区代码 | 二级工具 + `write_file`、`apply_patch`、`run_tests` | 展示 diff，「应用 / 撤销」 |
 
 两条硬约束：
@@ -31,6 +31,14 @@
   记录；前端只拉取工作区与修改记录，不直接采用模型输出覆盖编辑器。
 - `ai_mode` 在考试发布后冻结；创建会话时把级别快照到 `AgentSession.level`，
   之后修改考试配置不影响进行中的会话。
+
+二级回复先完整生成，再由 `Qwen3.8-Flash` 独立审查。若含可直接照写的语句、
+过度完整的解法或超出当前提问，审查意见送回原助教重写一次；再不合格或审查失败，
+返回固定的安全提示。未经审查的正文不作为 SSE `delta` 发给考生。
+确定性检查额外拦截代码块、行内可执行表达式和超过 450 字的回答。明显要求忽略考试规则的
+请求会另记审计日志；普通的代码求助不视为攻击。审查调用的 token 计入用量。
+本地可运行 `python scripts/repro_limited_ai.py --fresh-student --problem-index 5
+--assert-conservative`，用真实 HTTP/SSE 对双有序数组中位数题做两轮回归。
 
 ## 技术选型
 
