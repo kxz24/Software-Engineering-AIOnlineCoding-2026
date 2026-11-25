@@ -350,11 +350,19 @@ class ProjectImportTests(TestCase):
             parse_package(raw)
 
     def test_dockerfile_is_advanced_mode(self):
-        metadata, public = parse_package(
-            self.managed_package(dockerfile="FROM python:3.11-slim\n")
-        )
+        raw = self.managed_package(dockerfile="FROM python:3.11-slim\n")
+        metadata, public = parse_package(raw)
         self.assertEqual(metadata["environment"], {"dockerfile": True})
         self.assertEqual(list(public), ["src/main.c"])
+        with mock.patch("judge.tasks.prepare_project_bundle.delay") as enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    "/api/v1/problems/import-project",
+                    {"file": SimpleUploadedFile("advanced.zip", raw)},
+                )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["preparationStatus"], "pending")
+        enqueue.assert_called_once()
 
     def test_reference_and_build_files_are_removed_from_runtime_package(self):
         raw = self.managed_package(dockerfile="FROM python:3.11-slim\n")
