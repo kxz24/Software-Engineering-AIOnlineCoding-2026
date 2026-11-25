@@ -49,9 +49,8 @@ class Problem(models.Model):
     )
     language = models.CharField(
         max_length=16,
-        choices=LANGUAGE_CHOICES,
         default=LANGUAGE_PYTHON,
-        verbose_name="判题语言",
+        verbose_name="语言标签（算法题限四种语言）",
     )
     difficulty = models.CharField(
         max_length=16,
