@@ -77,6 +77,7 @@ def converse(session, session_id, problem, prompt):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--problem-index", type=int, choices=range(7), default=3)
+    parser.add_argument("--exam-title", default=EXAM_TITLE)
     parser.add_argument("--username", default="student")
     parser.add_argument("--password", default="student123")
     parser.add_argument("--fresh-student", action="store_true",
@@ -106,7 +107,7 @@ def main():
         ))
     session.headers["Authorization"] = login["jwt"]
     exams = checked(session.get(f"{BASE}/my/exams", timeout=15))["exams"]
-    exam = next(row for row in exams if row["title"] == EXAM_TITLE)
+    exam = next(row for row in exams if row["title"] == args.exam_title)
     detail = checked(session.get(f"{BASE}/my/exams/{exam['id']}", timeout=15))
     problem = detail["problems"][args.problem_index]
     capabilities = checked(session.get(
