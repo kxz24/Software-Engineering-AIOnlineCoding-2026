@@ -12,12 +12,16 @@ class ReportError(Exception):
 
 
 ACTIVITIES = {"knowledge", "algorithm", "coding", "debugging", "other"}
+STUDENT_FIELDS = ("summary", "focus", "repeatedQuestions",
+                  "independentWork", "limitations")
 
 REPORT_RULES = """你是考试对话的过程分析员。只根据给定对话，返回 JSON，不要 Markdown。
 结构：{"turns":[{"userSeq":整数,"activity":"knowledge|algorithm|coding|debugging|other",
 "helpLevel":0到4的整数,"receivedLevel":0到4的整数,"evidence":"原话中的短摘录"}],
-"overview":"简短中文总结",
-"limitations":"证据限制"}。
+"studentReport":{"summary":"按提问领域概述次数、主要问题和实际获得的回答",
+"focus":"主要关注点","repeatedQuestions":"反复提问的主题，若无则说明未观察到",
+"independentWork":"有证据支持的自主完成部分，若无则说明无法判断",
+"limitations":"证据限制"}}。
 每条学生提问都要有一项；userSeq 必须来自输入中的学生消息。
 helpLevel 是学生请求的深度，receivedLevel 是助教实际给予的深度；
 0=无帮助，1=概念或思路，2=算法设计或调试方向，
@@ -27,10 +31,12 @@ helpLevel 是学生请求的深度，receivedLevel 是助教实际给予的深�
 不能仅因回答出现题目操作或数据结构名称，就把概念解释判为 2。
 只问错误原因或位置而未索要改法时，helpLevel 为 2，即使提到了具体报错或变量；
 只有明确请求怎么改、怎么修时，局部修错的 helpLevel 才是 3。
-若两者不一致，在 overview 单独说明。
 evidence 必须逐字摘自对应 userSeq 的学生提问，不能从助教回答中摘取。
-不能据此断言学生已经学会、
-存在作弊或给出最终成绩。"""
+studentReport 只写学生问了什么、得到什么回答，以及有证据的学习活动；
+按知识、算法、编程、调试等领域统计提问次数，聚焦具体主题，指出有无反复追问。
+不要写模型、提示词、审查、规则、系统是否合规，也不要比较 helpLevel 与 receivedLevel；
+这些信息只属于内部审查。没有代码或后续验证时，不得推断哪些部分由学生独立完成。
+不能据此断言学生已经学会、存在作弊或给出最终成绩。"""
 
 
 def build_help_report(messages, provider):
@@ -79,11 +85,27 @@ def build_help_report(messages, provider):
             if not isinstance(evidence, str) or not evidence or evidence not in user_text[seq]:
                 raise ValueError("unsupported evidence")
             seen.add(seq)
-        if not isinstance(result["overview"], str) or not isinstance(result["limitations"], str):
-            raise ValueError("invalid summary")
+        student_report = result["studentReport"]
+        if not isinstance(student_report, dict) or any(
+                not isinstance(student_report.get(key), str)
+                for key in STUDENT_FIELDS):
+            raise ValueError("invalid student report")
     except (ValueError, TypeError, KeyError) as exc:
         raise ReportError("汇报模型返回了无效或无依据的结果") from exc
-    return result
+    counts = {activity: 0 for activity in sorted(ACTIVITIES)}
+    for turn in turns:
+        counts[turn["activity"]] += 1
+    return {
+        "studentReport": {**{key: student_report[key] for key in STUDENT_FIELDS},
+                          "activityCounts": counts},
+        "systemReview": {
+            "turns": turns,
+            "overHelpUserSeqs": [turn["userSeq"] for turn in turns
+                                 if turn["receivedLevel"] > turn["helpLevel"]],
+            "underHelpUserSeqs": [turn["userSeq"] for turn in turns
+                                  if turn["receivedLevel"] < turn["helpLevel"]],
+        },
+    }
 
 
 def report_for_session(session):

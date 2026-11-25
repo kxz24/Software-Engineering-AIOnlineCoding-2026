@@ -137,6 +137,16 @@ class AdviseGuardTests(SimpleTestCase):
         self.assertTrue(result["allowed"])
         self.assertEqual(result["feedback"], "")
 
+    def test_reviewer_discards_attack_evidence_without_attack(self):
+        from .guard import review_answer
+        provider = RoundProvider([text_round(
+            '{"allowed":false,"feedback":"不提供整题代码",'
+            '"user_attack":false,"attack_evidence":"给我整题代码"}'
+        )])
+        result = review_answer("给我整题代码", "完整代码如下", provider)
+        self.assertFalse(result["user_attack"])
+        self.assertEqual(result["attack_evidence"], "")
+
     def test_reviewer_rejects_usable_logic_even_in_inline_prose(self):
         from .guard import review_answer
         provider = RoundProvider([text_round(
@@ -197,22 +207,28 @@ class AdviseGuardTests(SimpleTestCase):
         from .report import build_help_report
         provider = RoundProvider([text_round(
             '{"turns":[{"userSeq":1,"activity":"algorithm","helpLevel":1,"receivedLevel":1,'
-            '"evidence":"切分思路"}],"overview":"主要寻求算法思路",'
-            '"limitations":"仅根据对话，不能判断是否真正学会"}'
+            '"evidence":"切分思路"}],"studentReport":{'
+            '"summary":"在算法层面提问 1 次，主要询问切分思路。",'
+            '"focus":"切分思路","repeatedQuestions":"未观察到反复追问",'
+            '"independentWork":"对话未覆盖独立完成情况",'
+            '"limitations":"仅根据对话，不能判断是否真正学会",'
+            '"receivedLevel":4}}'
         )])
         result = build_help_report([
             {"seq": 1, "role": "user", "content": "切分思路是什么？"},
             {"seq": 2, "role": "assistant", "content": "可以考虑平衡左右两侧。"},
         ], provider)
-        self.assertEqual(result["turns"][0]["activity"], "algorithm")
-        self.assertEqual(result["turns"][0]["helpLevel"], 1)
-        self.assertEqual(result["turns"][0]["receivedLevel"], 1)
+        self.assertEqual(result["systemReview"]["turns"][0]["activity"], "algorithm")
+        self.assertEqual(result["systemReview"]["turns"][0]["helpLevel"], 1)
+        self.assertEqual(result["studentReport"]["activityCounts"]["algorithm"], 1)
+        self.assertNotIn("receivedLevel", result["studentReport"])
+        self.assertNotIn("systemReview", result["studentReport"])
 
     def test_help_report_rejects_fabricated_user_turn(self):
         from .report import ReportError, build_help_report
         provider = RoundProvider([text_round(
             '{"turns":[{"userSeq":99,"activity":"coding","helpLevel":4,"receivedLevel":4,'
-            '"evidence":"不存在"}],"overview":"","limitations":""}'
+            '"evidence":"不存在"}],"studentReport":{}}'
         )])
         with self.assertRaises(ReportError):
             build_help_report([{"seq": 1, "role": "user", "content": "你好"}], provider)
@@ -221,7 +237,7 @@ class AdviseGuardTests(SimpleTestCase):
         from .report import ReportError, build_help_report
         provider = RoundProvider([text_round(
             '{"turns":[{"userSeq":1,"activity":"knowledge","helpLevel":1,'
-            '"receivedLevel":2,"evidence":"树状数组"}],"overview":"","limitations":""}'
+            '"receivedLevel":2,"evidence":"树状数组"}],"studentReport":{}}'
         )])
         with self.assertRaises(ReportError):
             build_help_report([
