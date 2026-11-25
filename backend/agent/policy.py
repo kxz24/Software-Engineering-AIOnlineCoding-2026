@@ -122,6 +122,73 @@ def diagnostic_only_request(question):
             and not bool(re.search(r"(?:怎么|如何)(?:修|改|解决|处理|写|调)|修复|修正|改成", question)))
 
 
+def asks_for_check_targets_only(question):
+    """The student requests a list of places/cases to inspect, not their verdicts."""
+    question = str(question or "")
+    return (bool(re.search(r"哪些|哪几(?:种|类|处)|什么(?:部分|位置|情况|因素|对象|文件)|先看哪里|重点检查什么", question))
+            and bool(re.search(r"检查|关注|先看|排查|观察|考虑", question))
+            and not bool(re.search(r"(?:怎么|如何)(?:判断|判定|处理|解决|实现|写|改|检查|排查|验证|计算)|"
+                                   r"(?:分别|具体)(?:怎么|如何|判断|判定)|判定条件|完整做法", question)))
+
+
+def _unrequested_case_verdicts(question, text):
+    if not asks_for_check_targets_only(question):
+        return False
+    # A single condition may explain why an object matters. Multiple conditional
+    # rules or an output verdict turn an inspection list into the next solution step.
+    rules = re.findall(r"只要|一旦|如果|若(?=[^，。；\n]{1,24}(?:就|则|时))|取决于|"
+                       r"(?<=[，。；\n])当[^，。；\n]{1,24}时|(?<=[，。；\n])[^，。；\n]{1,24}则", text)
+    verdict = re.search(r"(?:答案|结果|输出|返回)[^。；\n]{0,25}"
+                        r"(?:Yes|No|true|false|成立|不成立|成功|失败|定了|确定|可判|已知)",
+                        text, re.IGNORECASE)
+    return bool(verdict or len(rules) >= 2)
+
+
+def trim_unrequested_list_tail(question, text):
+    """A check-target list is complete at its last item; drop unsolicited epilogues."""
+    if not asks_for_check_targets_only(question):
+        return text
+    lines = text.splitlines()
+    item = r"^\s*(?:[-*]|\d+[.)])\s+"
+    first_item = next((index for index, line in enumerate(lines)
+                       if re.match(item, line)), None)
+    if first_item is None:
+        return text
+    for index in range(first_item + 1, len(lines)):
+        if not lines[index].strip():
+            next_line = next((line for line in lines[index + 1:] if line.strip()), "")
+            if next_line and not re.match(item, next_line):
+                return "\n".join(lines[:index]).rstrip()
+    return text
+
+
+def extract_scope_targets(question, reviewed_text):
+    """Retain only short target names from a semantically approved scope reply."""
+    if not asks_for_check_targets_only(question):
+        return ""
+    names = []
+    for line in reviewed_text.splitlines():
+        item = re.match(r"^\s*(?:[-*]|\d+[.)])\s+(.+)$", line)
+        if not item:
+            continue
+        bold_heading = re.match(r"\*\*([^*]{1,45})\*\*", item.group(1))
+        heading = (bold_heading.group(1) if bold_heading else
+                   re.split(r"[:：。；—]", item.group(1), maxsplit=1)[0])
+        heading = heading.strip(" *`\t")
+        if (not heading or len(heading) > 45
+                or re.match(r"^(?:注意|提醒|补充|总结|不要|还要|接下来)", heading)
+                or re.search(r"[=<>]|答案|输出|返回|如果|只要|取决于", heading)):
+            continue
+        if heading not in names:
+            names.append(heading)
+        if len(names) == 6:
+            break
+    if not names:
+        return ""
+    result = "可以先检查这些对象：\n" + "\n".join(f"- {name}" for name in names)
+    return result if not scoped_violation(question, result) else ""
+
+
 def _single_fenced_line(text):
     matches = list(_FENCED.finditer(text))
     if len(matches) != 1:
@@ -142,6 +209,11 @@ def scoped_violation(question, text):
     issues = []
     if len(text) > 750:
         issues.append("回答过长；只解释当前问题，概念题最多用一个小例子。")
+    if _unrequested_case_verdicts(question, text):
+        issues.append("学生只问应检查的对象；请列出对象及其重要性，删除各情况的判定条件、结果和后续处理。")
+    if (asks_for_check_targets_only(question)
+            and re.search(r"只能发生在|只可能发生在|无需(?:再)?检查(?:其他|其余)|其他(?:位置|情况)都(?:不用|不必)看", text)):
+        issues.append("列检查范围时不要擅自排除其他可能决定结果的对象；请保留完整检查范围。")
     if diagnostic_only_request(question):
         inline_code = re.findall(r"`([^`\n]+)`", text)
         if (_EXECUTABLE_INLINE.search(text)

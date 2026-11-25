@@ -252,6 +252,44 @@ class AdviseGuardTests(SimpleTestCase):
         self.assertFalse(scoped_violation("我没学过差分，它是什么？", explanation))
         self.assertTrue(scoped_violation("我没学过差分，它是什么？", "`d[l] += x`"))
 
+    def test_scope_question_blocks_unrequested_case_verdicts(self):
+        from .policy import scoped_violation
+        question = "我该重点检查哪些相邻位置？先讲思路就好。"
+        leaked = ("检查固定相邻对和含空位的相邻对。只要固定对不递增，答案就直接是 Yes。"
+                  "左边为空位时取决于能否填得不小于右边；右边为空位时取决于能否填得不大于左边。")
+        self.assertIn("判定", scoped_violation(question, leaked))
+        self.assertFalse(scoped_violation(
+            question, "关注所有相邻位置，区分两端已固定与含待填位置的相邻对；前者状态已确定，"
+                      "后者会受可填数值影响。"))
+        self.assertIn("判定", scoped_violation(
+            "图中要重点检查哪些节点？", "检查入口和出口。若入度为零就入队；如果出度为零就输出；"
+                                 "只要发现环就返回失败。"))
+        self.assertFalse(scoped_violation(
+            "这三种情况分别怎么判断？", leaked))
+        self.assertFalse(scoped_violation(
+            "哪些节点需要检查，具体怎么判断？", leaked))
+        self.assertIn("判定", scoped_violation(
+            question, "检查固定位置对与待填位置对。固定位置对的关系不会再变；"
+                      "如果其中一对已经破坏顺序，那答案直接就定了。"))
+        self.assertIn("排除", scoped_violation(
+            question, "固定相邻对可能已破坏顺序；含待填位置的相邻对也应检查，"
+                      "但破坏顺序只能发生在含待填位置的相邻对上。"))
+
+    def test_scope_answer_stops_after_requested_list(self):
+        from .policy import extract_scope_targets, trim_unrequested_list_tail
+        question = "应该检查哪些位置？"
+        answer = "检查这些位置：\n\n- 入口：可能影响起点。\n- 出口：可能影响终点。\n\n接下来直接计算所有路径。"
+        self.assertEqual(trim_unrequested_list_tail(question, answer),
+                         "检查这些位置：\n\n- 入口：可能影响起点。\n- 出口：可能影响终点。")
+        self.assertEqual(trim_unrequested_list_tail("这些位置分别怎么算？", answer), answer)
+        two_lists = ("检查这些位置：\n\n1. 入口：可能影响起点。\n\n"
+                     "2. 出口：可能影响终点。\n\n另外注意：\n- 如果入口满足条件就返回 Yes。")
+        self.assertEqual(trim_unrequested_list_tail(question, two_lists),
+                         "检查这些位置：\n\n1. 入口：可能影响起点。\n\n2. 出口：可能影响终点。")
+        self.assertEqual(extract_scope_targets(
+            question, "- 起点：需观察入口。\n- 终点：需观察出口。\n- 注意连续性：后续再处理。"),
+            "可以先检查这些对象：\n- 起点\n- 终点")
+
     def test_experiment_normalizes_one_requested_fenced_line(self):
         from .policy import scoped_violation, sanitize_scoped_text
         question = "values 这一行怎么改成快速输入？"
@@ -281,6 +319,24 @@ class AdviseGuardTests(SimpleTestCase):
         self.assertEqual(result["studentReport"]["activityCounts"]["algorithm"], 1)
         self.assertNotIn("receivedLevel", result["studentReport"])
         self.assertNotIn("systemReview", result["studentReport"])
+
+    def test_report_counts_requested_target_list_as_sufficient_help(self):
+        from .report import build_help_report
+        provider = RoundProvider([text_round(
+            '{"turns":[{"userSeq":1,"activity":"algorithm","helpLevel":2,'
+            '"receivedLevel":1,"evidence":"需要检查哪些节点"}],"studentReport":{'
+            '"summary":"询问检查对象，获得节点列表。","focus":"节点范围",'
+            '"repeatedQuestions":"未观察到","independentWork":"无法判断",'
+            '"limitations":"仅有一轮对话"}}'
+        )])
+        result = build_help_report([
+            {"seq": 1, "role": "user", "content": "需要检查哪些节点？"},
+            {"seq": 2, "role": "assistant", "content":
+             "可以先检查这些对象：\n- 起点\n- 终点"},
+        ], provider)
+        self.assertEqual(result["systemReview"]["turns"][0]["receivedLevel"], 2)
+        self.assertEqual(result["systemReview"]["underHelpUserSeqs"], [])
+        self.assertEqual(result["studentReport"]["summary"], "询问检查对象，获得节点列表。")
 
     def test_help_report_rejects_fabricated_user_turn(self):
         from .report import ReportError, build_help_report
@@ -591,6 +647,58 @@ class SessionAndMessageTests(AgentBaseTestCase):
 
 
 class ToolPermissionTests(AgentBaseTestCase):
+    def test_scope_question_revises_even_when_model_review_approves(self):
+        session = self.create_session()
+        service.add_user_message(session, "我该重点检查哪些相邻位置？先讲思路就好。")
+        leaked = ("检查固定相邻对和含空位的相邻对。只要固定对不递增，答案就直接是 Yes。"
+                  "左边为空位时取决于能否填得不小于右边；右边为空位时取决于能否填得不大于左边。")
+        corrected = "关注所有相邻位置，区分两端已固定与含待填位置的相邻对；前者状态已确定，后者会受可填数值影响。"
+        provider = RoundProvider([text_round(leaked), text_round(corrected)])
+        class Reviewer:
+            def review(self, question, answer):
+                return {"allowed": True, "feedback": "", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+        events = list(service.generate_events(session, provider=provider, reviewer=Reviewer()))
+        streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
+        self.assertEqual(streamed, corrected)
+        self.assertEqual(provider.calls, 2)
+        self.assertIn("判定", provider.requests[1][-1]["content"])
+        self.assertIn("【本轮回答范围】", provider.requests[0][0]["content"])
+
+    def test_scope_exhaustion_keeps_only_reviewed_target_names(self):
+        session = self.create_session()
+        service.add_user_message(session, "需要检查哪些相邻位置？")
+        leaked = ("重点检查：\n- 两端已确定的相邻对：只要不递增，答案直接是 Yes。\n"
+                  "- 含待填位置的相邻对：取决于是否能填更大的数。\n\n接下来计算所有阈值。")
+        provider = RoundProvider([text_round(leaked)] * 3)
+        class Reviewer:
+            def review(self, question, answer):
+                return {"allowed": True, "feedback": "", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+        events = list(service.generate_events(session, provider=provider, reviewer=Reviewer()))
+        streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
+        self.assertIn("两端已确定的相邻对", streamed)
+        self.assertIn("含待填位置的相邻对", streamed)
+        self.assertNotIn("Yes", streamed)
+        self.assertNotIn("阈值", streamed)
+
+    def test_scope_answer_keeps_targets_but_drops_wrong_explanation(self):
+        session = self.create_session()
+        service.add_user_message(session, "重点检查哪些相邻位置？")
+        candidate = ("需要检查三类：\n\n1. **固定相邻对**。它们不会破坏顺序。\n\n"
+                     "2. **含待填位置的相邻对**。只要满足条件就能直接输出 Yes。")
+        class Reviewer:
+            def review(self, question, answer):
+                return {"allowed": True, "feedback": "", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+        events = list(service.generate_events(
+            session, provider=RoundProvider([text_round(candidate)]), reviewer=Reviewer()))
+        streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
+        self.assertIn("固定相邻对", streamed)
+        self.assertIn("含待填位置的相邻对", streamed)
+        self.assertNotIn("不会破坏", streamed)
+        self.assertNotIn("Yes", streamed)
+
     def test_hidden_sample_not_in_prompt(self):
         session = self.create_session()
         messages = service.build_messages(session)

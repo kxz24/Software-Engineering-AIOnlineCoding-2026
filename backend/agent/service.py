@@ -17,7 +17,9 @@ from . import tools
 from .guard import GuardError, configured_reviewer
 from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level
 from .models import AgentMessage, AgentSession
-from .policy import localized_request, scoped_violation, sanitize_scoped_text
+from .policy import (asks_for_check_targets_only, extract_scope_targets, localized_request,
+                     scoped_violation, sanitize_scoped_text,
+                     trim_unrequested_list_tail)
 from .providers import ProviderError, get_provider, provider_info
 
 logger = logging.getLogger(__name__)
@@ -175,7 +177,8 @@ def _system_prompt(session):
             "必要时用一个很小的数字例子解释，再联系本题当前操作。"
             "让解释足以听懂，但一个例子已经说明时就停止，不主动引入后续数据结构、"
             "通用更新规则、查询路径或整题做法。"
-            "问算法构思时，讲清所问结构的作用和原因，不主动展开实现流程。"
+            "问算法构思或某步骤的作用时，讲清所问结构的作用和原因，不主动展开实现流程；"
+            "除非学生要求举例，否则不为已有步骤另编数字例子。"
             "如果只问应关注哪些部分或检查哪些情况，指出这些对象及其重要性即可；"
             "不要替学生逐一推导各情况的判定结论和完整处理办法。"
             "说明检查范围时避免把仍可能决定结果的情况排除在外；"
@@ -328,6 +331,12 @@ def generate_events(session, provider=None, reviewer=None):
             reviewer.problem_context = (session.problem.description or "")[:3000]
     question = (session.messages.filter(role=AgentMessage.ROLE_USER)
                 .order_by("-seq").values_list("content", flat=True).first() or "")
+    if redact_code and asks_for_check_targets_only(question):
+        context[0]["content"] += (
+            "\n【本轮回答范围】只需列出检查对象。"
+            "不要展开各类的成立条件、判定结果、处理步骤或整题结论；"
+            "检查范围应覆盖所有可能影响结果的情况。"
+        )
     attack_logged = False
 
     try:
@@ -363,6 +372,7 @@ def generate_events(session, provider=None, reviewer=None):
                     round_usage = _empty_totals()
                     if usage_event:
                         _accumulate(round_usage, usage_event)
+                    reviewed_scope_candidate = ""
                     for attempt in range(3):
                         verdict = None
                         for review_try in range(2):
@@ -387,11 +397,18 @@ def generate_events(session, provider=None, reviewer=None):
                             )
                             attack_logged = True
                         local_issue = scoped_violation(question, content)
+                        if verdict["allowed"] and asks_for_check_targets_only(question):
+                            reviewed_scope_candidate = content
+                            names_only = extract_scope_targets(question, content)
+                            if names_only:
+                                content = names_only
+                                local_issue = ""
                         if verdict["allowed"] and not local_issue:
                             break
                         if attempt == 2:
-                            content = ("在当前模式下，我无法提供具体代码实现。"
-                                       "你可以询问本题的思路、概念或调试方向。")
+                            content = (extract_scope_targets(question, reviewed_scope_candidate)
+                                       or "在当前模式下，我无法提供具体代码实现。"
+                                          "你可以询问本题的思路、概念或调试方向。")
                             break
                         review_issues = [part for part in (verdict["feedback"], local_issue)
                                          if part]
@@ -439,6 +456,7 @@ def generate_events(session, provider=None, reviewer=None):
                         "cacheMissTokens": round_usage["cache_miss"],
                     }
                 content = sanitize_scoped_text(content, question)
+                content = trim_unrequested_list_tail(question, content)
                 if attack_logged and not tool_calls and content:
                     content += "\n\n当前请求包含试图改变考试 AI 规则的内容，相关对话已记录。"
                 if content:

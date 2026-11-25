@@ -4,6 +4,7 @@ import json
 
 from django.conf import settings
 
+from .policy import asks_for_check_targets_only
 from .providers import DeepSeekProvider, ProviderError, thinking_off_body
 
 
@@ -28,6 +29,8 @@ helpLevel 是学生请求的深度，receivedLevel 是助教实际给予的深�
 3=某个明确局部实现/修错，4=完整解法。不得把助教主动给得过多算成学生索取；
 新术语的定义、小数字例子及其与当前题目操作的联系仍属 1；
 询问多个解题组件各自的职责、为何配合，属于算法设计 2。
+只问应检查哪些对象或情况，获得相应对象列表时，也属于算法思路帮助 2；
+不要仅因为回答没有进一步推导各情况的判定条件，就判为帮助不足。
 不能仅因回答出现题目操作或数据结构名称，就把概念解释判为 2。
 只问错误原因或位置而未索要改法时，helpLevel 为 2，即使提到了具体报错或变量；
 只有明确请求怎么改、怎么修时，局部修错的 helpLevel 才是 3。
@@ -94,7 +97,19 @@ def build_help_report(messages, provider):
     except (ValueError, TypeError, KeyError) as exc:
         raise ReportError("汇报模型返回了无效或无依据的结果") from exc
     counts = {activity: 0 for activity in sorted(ACTIVITIES)}
+    replies = {}
+    current_user = None
+    for item in dialogue:
+        if item["role"] == "user":
+            current_user = item["seq"]
+        elif current_user is not None and item["content"].strip():
+            replies[current_user] = item["content"]
     for turn in turns:
+        seq = turn["userSeq"]
+        if (asks_for_check_targets_only(user_text[seq])
+                and replies.get(seq, "").startswith("可以先检查这些对象：\n- ")):
+            turn["receivedLevel"] = max(turn["receivedLevel"],
+                                        min(turn["helpLevel"], 2))
         counts[turn["activity"]] += 1
     return {
         "studentReport": {**{key: student_report[key] for key in STUDENT_FIELDS},
