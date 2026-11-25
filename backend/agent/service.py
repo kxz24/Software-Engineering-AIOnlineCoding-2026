@@ -176,6 +176,10 @@ def _system_prompt(session):
             "让解释足以听懂，但一个例子已经说明时就停止，不主动引入后续数据结构、"
             "通用更新规则、查询路径或整题做法。"
             "问算法构思时，讲清所问结构的作用和原因，不主动展开实现流程。"
+            "如果只问应关注哪些部分或检查哪些情况，指出这些对象及其重要性即可；"
+            "不要替学生逐一推导各情况的判定结论和完整处理办法。"
+            "说明检查范围时避免把仍可能决定结果的情况排除在外；"
+            "自拟数字例子须和同一例子中列出的数据一致。"
             "若提问很宽泛，先讲有助于入门的关键原理，再询问具体卡点。"
             "默认不讲代码具体怎么写；概念或思路问题不要给可照写的赋值式、更新语句、代码块，"
             "也不要把这类表达式放进反引号中；数字例子用普通文字说明变化。"
@@ -321,6 +325,7 @@ def generate_events(session, provider=None, reviewer=None):
     if redact_code and reviewer is None and getattr(settings, "AGENT_GUARD_ENABLED", True):
         if getattr(settings, "AGENT_PROVIDER", "mock") == "deepseek":
             reviewer = configured_reviewer()
+            reviewer.problem_context = (session.problem.description or "")[:3000]
     question = (session.messages.filter(role=AgentMessage.ROLE_USER)
                 .order_by("-seq").values_list("content", flat=True).first() or "")
     attack_logged = False

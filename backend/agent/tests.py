@@ -173,6 +173,19 @@ class AdviseGuardTests(SimpleTestCase):
         self.assertFalse(result["user_attack"])
         self.assertEqual(result["attack_evidence"], "")
 
+    def test_reviewer_receives_problem_goal_as_separate_context(self):
+        import json
+        from .guard import AnswerReviewer
+        provider = RoundProvider([text_round(
+            '{"allowed":true,"feedback":"","user_attack":false,"attack_evidence":""}'
+        )])
+        reviewer = AnswerReviewer(provider)
+        reviewer.problem_context = "判断能否使序列不再严格递增，输出 Yes 或 No。"
+        reviewer.review("这里为什么输出 Yes？", "因为存在一对逆序。")
+        payload = json.loads(provider.requests[0][1]["content"])
+        self.assertEqual(payload["problem"], reviewer.problem_context)
+        self.assertEqual(payload["question"], "这里为什么输出 Yes？")
+
     def test_reviewer_rejects_usable_logic_even_in_inline_prose(self):
         from .guard import review_answer
         provider = RoundProvider([text_round(
