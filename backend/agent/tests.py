@@ -106,6 +106,30 @@ class AdviseGuardTests(SimpleTestCase):
         text = "可以用 `input()` 读取一行，注意还要处理空行。"
         self.assertEqual(sanitize_advise_text(text), text)
 
+    def test_reviewer_accepts_natural_language_hint(self):
+        from .guard import review_answer
+        provider = RoundProvider([text_round(
+            '{"allowed":true,"feedback":"","user_attack":false,"attack_evidence":"}'
+        )])
+        result = review_answer("思路是什么？", "可以考虑二分切分。", provider)
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["feedback"], "")
+
+    def test_reviewer_rejects_usable_logic_even_in_inline_prose(self):
+        from .guard import review_answer
+        provider = RoundProvider([text_round(
+            '{"allowed":false,"feedback":"删除 leftA 的赋值式，只解释空边界的含义",'
+            '"user_attack":false,"attack_evidence":""}'
+        )])
+        result = review_answer("请解释边界", "`leftA = a[i-1] if i > 0 else float('-inf')`", provider)
+        self.assertFalse(result["allowed"])
+        self.assertIn("删除", result["feedback"])
+
+    def test_reviewer_rejects_unparseable_verdict(self):
+        from .guard import GuardError, review_answer
+        with self.assertRaises(GuardError):
+            review_answer("思路是什么？", "答案", RoundProvider([text_round("当然可以")]))
+
 
 class AgentBaseTestCase(TestCase):
     def setUp(self):
@@ -357,6 +381,42 @@ class ToolPermissionTests(AgentBaseTestCase):
             .order_by("-seq").first()
         )
         self.assertNotIn("print(a + b)", assistant.content)
+
+    def test_advise_revises_before_streaming(self):
+        session = self.create_session()
+        provider = RoundProvider([
+            text_round("`leftA = a[i-1] if i > 0 else float('-inf')`"),
+            text_round("当左侧为空时，把它视作负无穷，避免单独处理比较。"),
+        ])
+        verdicts = [
+            {"allowed": False, "feedback": "删除可直接使用的赋值式", "user_attack": False,
+             "attack_evidence": "", "usage": {}},
+            {"allowed": True, "feedback": "", "user_attack": False,
+             "attack_evidence": "", "usage": {}},
+        ]
+        class Reviewer:
+            def review(self, question, answer):
+                return verdicts.pop(0)
+        with override_settings(AGENT_GUARD_ENABLED=True):
+            events = list(service.generate_events(session, provider=provider, reviewer=Reviewer()))
+        streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
+        self.assertNotIn("leftA =", streamed)
+        self.assertIn("负无穷", streamed)
+        self.assertEqual(provider.calls, 2)
+
+    def test_advise_falls_back_after_two_rejections(self):
+        session = self.create_session()
+        provider = RoundProvider([text_round("`answer = 42`"), text_round("`answer = 42`")])
+        class Reviewer:
+            def review(self, question, answer):
+                return {"allowed": False, "feedback": "仍含答案语句", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+        with override_settings(AGENT_GUARD_ENABLED=True):
+            events = list(service.generate_events(session, provider=provider, reviewer=Reviewer()))
+        streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
+        self.assertNotIn("answer =", streamed)
+        self.assertIn("当前模式", streamed)
+        self.assertEqual(provider.calls, 2)
 
     def test_max_tokens_passed_to_provider(self):
         """settings 的输出上限要原样传给 provider。"""
