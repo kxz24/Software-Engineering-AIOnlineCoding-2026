@@ -196,6 +196,7 @@ async function request<T>(
         method?: string;
         body?: unknown;
         query?: Record<string, string | undefined>;
+        signal?: AbortSignal;
     } = {}
 ): Promise<T> {
     if (typeof fetch !== "function") {
@@ -226,6 +227,7 @@ async function request<T>(
                 "Authorization": getToken() || "",
             },
             body: options.body === undefined ? undefined : JSON.stringify(options.body),
+            signal: options.signal,
         });
     } catch (e) {
         throw new ApiError(NetworkErrorMessage, 0);
@@ -613,6 +615,33 @@ export interface SubmissionCase {
     memoryKb: number;
     outputExcerpt?: string;
     errorExcerpt?: string;
+}
+
+export interface SampleRunCase {
+    index: number;
+    name: string;
+    verdict: string;
+    timeMs: number;
+    expectedOutput: string;
+    outputExcerpt: string;
+    errorExcerpt: string;
+}
+
+export type SampleRunResult =
+    | { status: "queued" | "running" }
+    | { status: "completed"; compileOk: boolean; compileOutput: string; cases: SampleRunCase[] }
+    | { status: "failed"; message: string };
+
+export function startSampleRun(
+    examId: number, problemId: number, code: string, signal: AbortSignal
+): Promise<{ runId: string }> {
+    return request(Urls.sampleRuns(examId, problemId), { method: "POST", body: { code }, signal });
+}
+
+export function fetchSampleRun(
+    examId: number, problemId: number, runId: string, signal: AbortSignal
+): Promise<SampleRunResult> {
+    return request(`${Urls.sampleRuns(examId, problemId)}/${runId}`, { signal });
 }
 
 /** 单条提交详情（含用例结果） */

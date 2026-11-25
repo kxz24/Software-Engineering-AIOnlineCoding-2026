@@ -30,6 +30,8 @@ export const Urls = {
     myExamSubmissions: (examId: number) => `/api/v1/my/exams/${examId}/submissions`, // GET
     mySubmission: (examId: number, problemId: number) =>
         `/api/v1/my/exams/${examId}/problems/${problemId}/submissions`, // GET / POST
+    sampleRuns: (examId: number, problemId: number) =>
+        `/api/v1/my/exams/${examId}/problems/${problemId}/sample-runs`,
 
     submissionDetail: (submissionId: number) =>
         `/api/v1/submissions/${submissionId}`, // GET 单条提交详情（轮询判题结果）

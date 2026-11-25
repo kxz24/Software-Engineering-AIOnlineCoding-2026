@@ -15,6 +15,16 @@ urlpatterns = [
     path("api/v1/my/exams/<int:exam_id>", views.MyExamDetailView.as_view(), name="my_exam_detail"),
     path("api/v1/my/exams/<int:exam_id>/submissions", views.MyExamSubmissionsView.as_view(), name="my_exam_submissions"),
     path(
+        "api/v1/my/exams/<int:exam_id>/problems/<int:problem_id>/sample-runs",
+        views.MySampleRunCreateView.as_view(),
+        name="my_sample_runs",
+    ),
+    path(
+        "api/v1/my/exams/<int:exam_id>/problems/<int:problem_id>/sample-runs/<uuid:run_id>",
+        views.MySampleRunDetailView.as_view(),
+        name="my_sample_run",
+    ),
+    path(
         "api/v1/my/exams/<int:exam_id>/problems/<int:problem_id>/submissions",
         views.MySubmissionView.as_view(),
         name="my_submission",

@@ -1,15 +1,34 @@
+import logging
+from uuid import uuid4
+
+from django.conf import settings
+from django.core.cache import caches
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from redis.exceptions import RedisError
 
+from judge.languages import LANGUAGES
+from judge.tasks import (
+    SAMPLE_RUN_LOCK_TTL,
+    SAMPLE_RUN_QUEUE_TIMEOUT,
+    run_sample_tests,
+)
+from problem.models import Problem
 from user.models import User
 from utils.jwt import login_required, role_required
 
 from . import controllers
 from .models import Exam
+
+logger = logging.getLogger(__name__)
+
+
+def _sample_run_key(student_id, exam_id, problem_id, run_id):
+    return f"run:{student_id}:{exam_id}:{problem_id}:{run_id}"
 
 
 def _parse_time(value):
@@ -331,6 +350,75 @@ class MyExamSubmissionsView(APIView):
             {"submissions": controllers.my_submissions(request.user, exam)},
             status=status.HTTP_200_OK,
         )
+
+
+class MySampleRunCreateView(APIView):
+    """试运行当前答案，仅使用公开样例。"""
+
+    @login_required
+    def post(self, request, exam_id, problem_id):
+        exam, ok = _load_exam(exam_id)
+        if not ok:
+            return Response({"message": "考试不存在"}, status=status.HTTP_404_NOT_FOUND)
+        if request.user.role != User.ROLE_STUDENT or not controllers.is_candidate(exam, request.user):
+            return Response({"message": "仅本场考试的考生可运行代码"}, status=status.HTTP_403_FORBIDDEN)
+        if exam.status != Exam.STATUS_PUBLISHED or controllers._student_status(exam) != "ongoing":
+            return Response({"message": "仅可在考试进行期间运行代码"}, status=status.HTTP_400_BAD_REQUEST)
+
+        item = exam.exam_problems.filter(problem_id=problem_id).select_related("problem").first()
+        if item is None:
+            return Response({"message": "本场考试没有这道题"}, status=status.HTTP_404_NOT_FOUND)
+        problem = item.problem
+        config = LANGUAGES.get(problem.language)
+        if problem.type != Problem.TYPE_ALGORITHM or config is None:
+            return Response({"message": "本题暂不支持试运行"}, status=status.HTTP_400_BAD_REQUEST)
+        if not config.compile and not problem.samples.filter(is_sample=True).exists():
+            return Response({"message": "本题没有可运行的公开样例"}, status=status.HTTP_400_BAD_REQUEST)
+
+        code = request.data.get("code") if isinstance(request.data, dict) else None
+        if not isinstance(code, str) or not code.strip():
+            return Response({"message": "请先编写代码"}, status=status.HTTP_400_BAD_REQUEST)
+        if len(code) > 200_000:
+            return Response({"message": "代码过长（上限 200 000 字符）"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not settings.JUDGE_ENQUEUE_ENABLED:
+            return Response({"message": "运行服务暂未开启"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        run_id = uuid4()
+        cache = caches["sample_runs"]
+        run_key = _sample_run_key(request.user.id, exam_id, problem_id, run_id)
+        lock_key = f"active:{request.user.id}"
+        try:
+            if not cache.add(lock_key, True, SAMPLE_RUN_LOCK_TTL):
+                return Response({"message": "已有一次运行正在处理，请稍候"}, status=status.HTTP_409_CONFLICT)
+            try:
+                cache.set(run_key, {"status": "queued"}, SAMPLE_RUN_QUEUE_TIMEOUT + 5)
+                run_sample_tests.apply_async(
+                    args=(run_key, lock_key, problem_id, code),
+                    expires=SAMPLE_RUN_QUEUE_TIMEOUT,
+                    retry=False,
+                )
+            except Exception:
+                cache.delete_many([run_key, lock_key])
+                raise
+        except Exception:
+            logger.exception("公开样例运行入队失败 problem=%s", problem_id)
+            return Response({"message": "运行服务暂时不可用，请稍后重试"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response({"runId": str(run_id)}, status=status.HTTP_202_ACCEPTED)
+
+
+class MySampleRunDetailView(APIView):
+    """查询本人试运行的状态和诊断。"""
+
+    @login_required
+    def get(self, request, exam_id, problem_id, run_id):
+        key = _sample_run_key(request.user.id, exam_id, problem_id, run_id)
+        try:
+            result = caches["sample_runs"].get(key)
+        except RedisError:
+            return Response({"message": "暂时无法读取运行结果，请稍后重试"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if result is None:
+            return Response({"message": "运行已超时或结果已过期，请重新运行"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(result)
 
 
 class MySubmissionView(APIView):

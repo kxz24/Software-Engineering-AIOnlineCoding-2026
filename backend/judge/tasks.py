@@ -4,6 +4,7 @@
 import logging
 
 from celery import shared_task
+from django.core.cache import caches
 from django.db import transaction
 from django.utils import timezone
 
@@ -25,6 +26,10 @@ logger = logging.getLogger(__name__)
 
 COMPILE_OUTPUT_LIMIT = 8192
 EXCERPT_LIMIT = 2048
+SAMPLE_RUN_QUEUE_TIMEOUT = 60
+SAMPLE_RUN_RESULT_TTL = 300
+SAMPLE_RUN_LOCK_TTL = SAMPLE_RUN_QUEUE_TIMEOUT + 10
+SAMPLE_RUN_EXECUTION_TTL = 130
 
 
 def _truncate(value, limit):
@@ -198,3 +203,47 @@ def judge_submission(self, submission_id):
         _mark_failed(submission, str(exc))
 
     return {"submissionId": submission_id}
+
+
+@shared_task(ignore_result=True, acks_late=False)
+def run_sample_tests(run_key, lock_key, problem_id, code):
+    """仅运行公开样例，把预览结果写入短期缓存。"""
+    cache = caches["sample_runs"]
+    if not cache.get(run_key):
+        return
+
+    cache.touch(lock_key, SAMPLE_RUN_EXECUTION_TTL)
+    cache.set(run_key, {"status": "running"}, SAMPLE_RUN_EXECUTION_TTL)
+    try:
+        problem = Problem.objects.get(pk=problem_id)
+        specs = _build_case_specs(problem.samples.filter(is_sample=True).order_by("id"))
+        result = run_sandbox(
+            language_key=problem.language,
+            code=code,
+            cases=specs,
+            time_limit_ms=problem.time_limit_ms,
+            memory_limit_mb=problem.memory_limit_mb,
+            output_limit_kb=problem.output_limit_kb,
+            compile_only=not specs,
+        )
+        cases = [{
+            "index": spec.index,
+            "name": spec.name,
+            "verdict": item["verdict"],
+            "timeMs": item["time_ms"],
+            "expectedOutput": _truncate(spec.expected_output, EXCERPT_LIMIT),
+            "outputExcerpt": _truncate(item.get("output_excerpt"), EXCERPT_LIMIT),
+            "errorExcerpt": _truncate(item.get("error_excerpt"), EXCERPT_LIMIT),
+        } for spec, item in zip(specs, sorted(result.cases, key=lambda item: item["index"]))]
+        outcome = {
+            "status": "completed",
+            "compileOk": result.compile_ok,
+            "compileOutput": _truncate(result.compile_output, COMPILE_OUTPUT_LIMIT),
+            "cases": cases,
+        }
+    except Exception:
+        logger.exception("公开样例运行失败 problem=%s", problem_id)
+        outcome = {"status": "failed", "message": "运行服务暂时不可用，请稍后重试。"}
+
+    cache.set(run_key, outcome, SAMPLE_RUN_RESULT_TTL)
+    cache.delete(lock_key)

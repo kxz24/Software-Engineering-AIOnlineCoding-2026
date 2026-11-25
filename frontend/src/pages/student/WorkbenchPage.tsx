@@ -3,6 +3,7 @@ import { Link, useHistory, useParams } from "react-router-dom";
 import { useSelector } from "react-redux";
 import { Icon } from "../../components/Icon";
 import { CodeEditor, LanguageOptions, languageForPath } from "../../components/CodeEditor";
+import { SampleRunPanel } from "../../components/SampleRunPanel";
 import { toast } from "../../components/Toast";
 import { Routes } from "../../api/urls";
 import { formatCountdown, secondsUntil } from "../../api/format";
@@ -992,6 +993,10 @@ export function WorkbenchPage() {
                                     <div className="muted" style={{ padding: 12, fontSize: 12 }}>没有可编辑的文件</div>
                                 )}
                             </div>
+                            {problem && (
+                                <SampleRunPanel examId={detail.id} problem={problem}
+                                                code={currentCode} finished={finished}/>
+                            )}
                         </div>
 
                     </section>
