@@ -35,24 +35,16 @@
 实验分支的二级回复按学生当前问题控制深度：宽泛问题只讲核心概念；学生明确指出
 某一行、变量或报错时，允许一处短的行内提示，仍不允许完整解法。
 回复先完整生成，再由 `Qwen3.8-Flash` 独立审查。若回答超出提问范围，
-审查意见送回原助教重写一次；再不合格或审查失败，
+审查意见送回原助教重写，最多审核三版；仍不合格或审查失败，
 返回固定的安全提示。未经审查的正文不作为 SSE `delta` 发给考生。
 确定性检查额外拦截代码块、宽泛问题下的行内实现式、多个实现片段和超过 450 字的回答。明显要求忽略考试规则的
 请求会另记审计日志；普通的代码求助不视为攻击。审查调用的 token 计入用量。
-保守分支可运行 `python scripts/repro_limited_ai.py --fresh-student --problem-index 5
---assert-conservative`，用真实 HTTP/SSE 对双有序数组中位数题做两轮回归。
-
-学习过程实验可运行 `python manage.py seed_loj_experiment`，预置改写自
+学习过程实验的本地验证采用改写自
 [LOJ #132](https://loj.ac/problem/132) 的区间修改/区间查询题与自制测试数据。
+完整题库、造题脚本与 HTTP/SSE 试验记录保存在本地，不随功能分支提交。
 `python manage.py agent_help_report <session_id>` 会用报告模型生成带原话证据的
 求助类型与深度摘要；它是供教师查看的试验性材料，不自动评分，也不推断学生是否学会。
 报告分别记录学生索取的帮助深度与助教实际给予的深度，便于发现系统主动给得过多。
-LOJ 题的本地 HTTP/SSE 体验：
-
-```bash
-python scripts/repro_limited_ai.py --fresh-student --exam-title "[学习过程实验] LOJ 数据结构练习" --problem-index 0 --single-prompt "这题有哪些知识点值得先学？只讲最重要的一个。"
-```
-
 ## 技术选型
 
 | 模块 | 选型 | 说明 |
