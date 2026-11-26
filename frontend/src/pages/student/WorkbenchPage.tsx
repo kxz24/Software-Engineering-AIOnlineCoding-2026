@@ -23,6 +23,7 @@ import {
     AgentSessionInfo,
     AgentStreamEvent,
     AgentWorkspaceFile,
+    cancelAgentHarnessJob,
     createAgentSession,
     fetchAgentCapabilities,
     fetchAgentChanges,
@@ -343,6 +344,9 @@ export function WorkbenchPage() {
     const [agentRevisions, setAgentRevisions] = useState<Record<string, number>>({});
     const [agentDraft, setAgentDraft] = useState("");
     const [agentAction, setAgentAction] = useState<"answer" | "run" | "edit">("answer");
+    const [agentScope, setAgentScope] = useState<"file" | "project">("file");
+    const [agentProgress, setAgentProgress] = useState<number | null>(null);
+    const [agentJobId, setAgentJobId] = useState<number | null>(null);
     const [agentTab, setAgentTab] = useState<"chat" | "changes">("chat");
     const agentAbortRef = useRef<AbortController | null>(null);
 
@@ -480,6 +484,9 @@ export function WorkbenchPage() {
         setAgentDisabledReason("");
         setAgentTab("chat");
         setAgentAction("answer");
+        setAgentScope("file");
+        setAgentProgress(null);
+        setAgentJobId(null);
         setAgentRevisions({});
         if (detail && problem) {
             loadAgent();
@@ -504,6 +511,8 @@ export function WorkbenchPage() {
         setAgentError(null);
         setAgentTab("chat");
         setAgentDraft("");
+        setAgentProgress(null);
+        setAgentJobId(null);
         setAgentMessages(current => [...current, {
             seq: -Date.now(),
             role: "user",
@@ -581,6 +590,10 @@ export function WorkbenchPage() {
                 case "error":
                     setAgentError(event.message);
                     break;
+                case "progress":
+                    setAgentProgress(event.steps);
+                    setAgentJobId(event.jobId);
+                    break;
                 default:
                     break;
             }
@@ -589,6 +602,7 @@ export function WorkbenchPage() {
         streamAgentMessage(sessionIdValue, {
             content: text,
             action: agentAction,
+            scope: agentScope,
             activeFile: currentPath,
             code: currentCode,
             workspaceRevision: currentPath ? agentRevisions[currentPath] : undefined,
@@ -632,6 +646,13 @@ export function WorkbenchPage() {
                     setAgentStream(null);
                 }
             });
+    };
+
+    const handleStopAgent = () => {
+        if (agentJobId !== null && agentSession) {
+            void cancelAgentHarnessJob(agentSession.sessionId, agentJobId);
+        }
+        agentAbortRef.current?.abort();
     };
 
     /** 撤销一次 AI 修改并同步编辑器 */
@@ -1216,9 +1237,19 @@ export function WorkbenchPage() {
                                                 <option value="edit">允许修改</option>
                                             </select>
                                         )}
+                                        {agentCaps?.canEditCode && problem?.publicFiles && agentAction === "edit" && (
+                                            <select value={agentScope}
+                                                    disabled={agentStreaming}
+                                                    aria-label="本轮修改范围"
+                                                    onChange={event => setAgentScope(event.target.value as "file" | "project")}>
+                                                <option value="file">仅当前文件</option>
+                                                <option value="project">整个项目</option>
+                                            </select>
+                                        )}
                                         <span className="input-hint">
                                             {agentStreaming
-                                                ? "正在生成，可点击右侧停止"
+                                                ? agentProgress === null ? "正在生成，可点击右侧停止"
+                                                    : `工程任务已进行 ${agentProgress} 步`
                                                 : "Enter 发送 · Shift+Enter 换行"}
                                         </span>
                                         {agentCaps && (
@@ -1232,7 +1263,7 @@ export function WorkbenchPage() {
                                     {agentStreaming ? (
                                         <button className="send-btn" type="button"
                                                 title="停止生成"
-                                                onClick={() => agentAbortRef.current?.abort()}>
+                                                onClick={handleStopAgent}>
                                             停止
                                         </button>
                                     ) : (
