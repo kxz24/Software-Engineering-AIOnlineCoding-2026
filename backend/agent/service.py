@@ -6,6 +6,7 @@ SSE 的传输细节由视图负责；本模块只产出结构化事件：
 """
 import json
 import logging
+import re
 
 from django.conf import settings
 from django.db import transaction
@@ -108,11 +109,12 @@ def next_seq(session):
     return (last or 0) + 1
 
 
-def add_user_message(session, content):
+def add_user_message(session, content, action="answer"):
     with transaction.atomic():
         return AgentMessage.objects.create(
             session=session, seq=next_seq(session), role=AgentMessage.ROLE_USER,
             content=str(content or "")[:20000],
+            requested_action=action,
         )
 
 
@@ -314,6 +316,68 @@ def _accumulate(totals, usage_event):
     totals["cache_miss"] += int(usage_event.get("cacheMissTokens") or 0)
 
 
+def _open_scope_issue(question, answer):
+    """Catch the clearest unsolicited code dump even if a reviewer misses it."""
+    overview = re.search(r"大致|思路|概念|是什么|含义|作用|为什么|哪些阶段|原理|概览", question)
+    implementation = re.search(r"代码|怎么写|怎么改|实现|命令|运行|修改|修复|完整解", question)
+    if overview and not implementation and "```" in answer:
+        return "学生只问解释或概览；删除未请求的代码块和实现步骤。"
+    return ""
+
+
+def _review_open_scope(session, question, content, context, provider, reviewer,
+                       max_tokens, usage_event):
+    totals = _empty_totals()
+    if usage_event:
+        _accumulate(totals, usage_event)
+    attack_evidence = ""
+    for attempt in range(3):
+        try:
+            verdict = reviewer.review(question, content)
+        except GuardError as exc:
+            logger.warning("回答范围审查失败 session=%s: %s", session.id, exc)
+            content = "这次回答未能完成范围审查。请重试当前问题。"
+            break
+        if verdict.get("usage"):
+            _accumulate(totals, verdict["usage"])
+        if verdict.get("user_attack") and verdict.get("attack_evidence"):
+            attack_evidence = verdict["attack_evidence"]
+        issue = _open_scope_issue(question, content)
+        if verdict["allowed"] and not issue:
+            break
+        if attempt == 2:
+            content = "这次回答超出了所问范围。请把当前卡点再具体描述一次。"
+            break
+        feedback = "；".join(part for part in (verdict["feedback"], issue) if part)
+        retry_context = context + [
+            {"role": "assistant", "content": content},
+            {"role": "user", "content": (
+                "只修改上一条回答，不重新求解。审查意见：" + feedback +
+                "。保留准确且切题的部分，删除未请求的代码、步骤和后续建议；"
+                "若学生明确要求代码，则只保留所问位置的代码。输出修改后的完整回答。")},
+        ]
+        revised = []
+        retry_provider = (provider.without_thinking()
+                          if getattr(settings, "AGENT_RETRY_DISABLE_THINKING", True)
+                          and hasattr(provider, "without_thinking") else provider)
+        try:
+            for event in retry_provider.stream(retry_context, [],
+                                               max_tokens=min(max_tokens, 1024)):
+                if event["type"] == "delta":
+                    revised.append(event["text"])
+                elif event["type"] == "usage":
+                    _accumulate(totals, event)
+        except ProviderError as exc:
+            logger.warning("回答范围整改失败 session=%s: %s", session.id, exc)
+            content = "这次回答未能完成范围审查。请重试当前问题。"
+            break
+        content = "".join(revised)
+    return content, {
+        "inputTokens": totals["input"], "outputTokens": totals["output"],
+        "cacheHitTokens": totals["cache_hit"], "cacheMissTokens": totals["cache_miss"],
+    }, attack_evidence
+
+
 def generate_events(session, provider=None, reviewer=None, turn_action="edit"):
     """
     生成一次 AI 回复的事件流（同步生成器）。
@@ -328,6 +392,8 @@ def generate_events(session, provider=None, reviewer=None, turn_action="edit"):
         return
 
     max_rounds = max(1, int(getattr(settings, "AGENT_MAX_TOOL_ROUNDS", 6)))
+    if turn_action == "answer":
+        max_rounds = min(max_rounds, 3)
     max_tokens = int(getattr(settings, "AGENT_MAX_OUTPUT_TOKENS", 1024))
     allowed_tools = set(tools_for_turn(session.level, turn_action))
     specifications = tools.tool_specs_for(session.level, allowed_tools)
@@ -359,10 +425,15 @@ def generate_events(session, provider=None, reviewer=None, turn_action="edit"):
     tool_context = tools.ToolContext(session, emit)
     # 二级会话在服务端过滤完整代码，不能只依赖提示词
     redact_code = not can_edit_code(session.level)
+    scope_guard = (can_edit_code(session.level)
+                   and getattr(settings, "AGENT_SCOPE_GUARD_ENABLED", True))
     if redact_code and reviewer is None and getattr(settings, "AGENT_GUARD_ENABLED", True):
         if getattr(settings, "AGENT_PROVIDER", "mock") == "deepseek":
             reviewer = configured_reviewer()
             reviewer.problem_context = (session.problem.description or "")[:3000]
+    if scope_guard and reviewer is None and getattr(settings, "AGENT_PROVIDER", "mock") == "deepseek":
+        reviewer = configured_reviewer(scope_only=True)
+        reviewer.problem_context = (session.problem.description or "")[:3000]
     question = (session.messages.filter(role=AgentMessage.ROLE_USER)
                 .order_by("-seq").values_list("content", flat=True).first() or "")
     if redact_code and asks_for_check_targets_only(question):
@@ -383,7 +454,7 @@ def generate_events(session, provider=None, reviewer=None, turn_action="edit"):
             for event in provider.stream(context, specifications, max_tokens=max_tokens):
                 if event["type"] == "delta":
                     text_parts.append(event["text"])
-                    if not redact_code:
+                    if not redact_code and not scope_guard:
                         yield event
                 elif event["type"] == "tool_call":
                     tool_calls.append(event)
@@ -493,6 +564,22 @@ def generate_events(session, provider=None, reviewer=None, turn_action="edit"):
                 content = trim_unrequested_list_tail(question, content)
                 if attack_logged and not tool_calls and content:
                     content += "\n\n当前请求包含试图改变考试 AI 规则的内容，相关对话已记录。"
+                if content:
+                    yield {"type": "delta", "text": content}
+            elif scope_guard:
+                if tool_calls:
+                    content = ""
+                elif reviewer and content:
+                    content, usage_event, attack_evidence = _review_open_scope(
+                        session, question, content, context, provider, reviewer,
+                        max_tokens, usage_event)
+                    if attack_evidence and not attack_logged:
+                        AuditLog.objects.create(
+                            user=session.student, action="agent_prompt_attack_suspected",
+                            detail=json.dumps({"sessionId": session.id,
+                                               "evidence": attack_evidence}, ensure_ascii=False),
+                        )
+                        attack_logged = True
                 if content:
                     yield {"type": "delta", "text": content}
             assistant_calls = _assistant_tool_calls(tool_calls)

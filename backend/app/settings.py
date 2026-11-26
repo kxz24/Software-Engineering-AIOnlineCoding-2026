@@ -230,6 +230,7 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 AGENT_MODEL = os.environ.get("AGENT_MODEL", "deepseek-chat")
 AGENT_GUARD_ENABLED = os.environ.get("AGENT_GUARD_ENABLED", "1") == "1"
+AGENT_SCOPE_GUARD_ENABLED = os.environ.get("AGENT_SCOPE_GUARD_ENABLED", "1") == "1"
 AGENT_GUARD_MODEL = os.environ.get("AGENT_GUARD_MODEL", "Qwen3.8-Flash")
 AGENT_REPORT_MODEL = os.environ.get("AGENT_REPORT_MODEL", AGENT_GUARD_MODEL)
 AGENT_GUARD_BASE_URL = os.environ.get("AGENT_GUARD_BASE_URL", DEEPSEEK_BASE_URL)
