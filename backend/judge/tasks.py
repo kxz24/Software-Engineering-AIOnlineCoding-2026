@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """异步判题任务。"""
 
+import json
 import logging
 
 from celery import shared_task
@@ -18,13 +19,37 @@ from judge.constants import (
 from judge.languages import normalize_language
 from judge.sandbox import CaseSpec, run_sandbox
 from judge.scoring import summarize
-from problem.models import Problem
+from judge.project_sandbox import run_project_sandbox
+from problem.models import Problem, ProjectBundle
 from user.controllers import record_audit
 
 logger = logging.getLogger(__name__)
 
 COMPILE_OUTPUT_LIMIT = 8192
 EXCERPT_LIMIT = 2048
+
+
+@shared_task(bind=True, time_limit=600, soft_time_limit=570)
+def prepare_project_bundle(self, bundle_id):
+    """Build a teacher-declared image and verify the private reference submission."""
+    bundle = ProjectBundle.objects.get(pk=bundle_id)
+    bundle.preparation_status = "preparing"
+    bundle.preparation_message = "正在准备工具并试跑参考提交"
+    bundle.save(update_fields=["preparation_status", "preparation_message"])
+    try:
+        from .project_environment import prepare_environment
+
+        image, message = prepare_environment(bundle)
+    except Exception as exc:
+        logger.exception("工程题环境准备失败 bundle=%s", bundle_id)
+        bundle.preparation_status = "failed"
+        bundle.preparation_message = str(exc)[:1000]
+        bundle.prepared_image = ""
+    else:
+        bundle.preparation_status = "ready"
+        bundle.preparation_message = message
+        bundle.prepared_image = image
+    bundle.save(update_fields=["preparation_status", "preparation_message", "prepared_image"])
 
 
 def _truncate(value, limit):
@@ -75,7 +100,9 @@ def _judge(submission):
     """执行一次判题；异常由调用方转成 failed 状态。"""
     problem = submission.problem
     if problem.type == Problem.TYPE_ENGINEERING:
-        raise RuntimeError("工程题暂不支持自动判题，请教师人工复核")
+        if not hasattr(problem, "project_bundle"):
+            raise RuntimeError("工程题没有导入评分包，请教师人工复核")
+        return _judge_project(submission)
 
     samples = list(problem.samples.all().order_by("id"))
     if not samples:
@@ -169,6 +196,59 @@ def _judge(submission):
         f"{submission.id} {summary['verdict']} {summary['score']}分 "
         f"{summary['passed_count']}/{summary['total_count']}",
     )
+
+
+def _judge_project(submission):
+    """Score a multi-file submission using its teacher-owned package."""
+    bundle = submission.problem.project_bundle
+    try:
+        files = json.loads(submission.code)["files"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError("工程题提交快照无效") from exc
+    result = run_project_sandbox(bundle, files)
+    items = result["items"]
+    maximum = bundle.max_score
+    raw_score = float(result["score"])
+    if not 0 <= raw_score <= maximum:
+        raise RuntimeError("工程题评分超出范围")
+    exam_item = ExamProblem.objects.filter(
+        exam=submission.exam, problem=submission.problem
+    ).first()
+    possible = exam_item.score if exam_item else 0
+    score = round(possible * raw_score / maximum)
+    pending = bool(result.get("needsReview"))
+    if raw_score >= maximum and not pending:
+        verdict = "accepted"
+    elif raw_score > 0:
+        verdict = "partial"
+    else:
+        verdict = "wrong_answer"
+    passed = sum(1 for item in items if item.get("score") == item.get("maxScore"))
+    visible = [item for item in items if item.get("visible")]
+    with transaction.atomic():
+        Submission.objects.filter(id=submission.id).update(
+            status=STATUS_JUDGED, verdict=verdict, score=score,
+            passed_count=passed, total_count=len(items),
+            sample_passed=sum(1 for item in visible if item.get("score") == item.get("maxScore")),
+            sample_total=len(visible), hidden_passed=passed - sum(
+                1 for item in visible if item.get("score") == item.get("maxScore")
+            ), hidden_total=len(items) - len(visible),
+            needs_review=pending, judge_error="", compile_output="",
+            judged_at=timezone.now(),
+        )
+        SubmissionCase.objects.filter(submission_id=submission.id).delete()
+        SubmissionCase.objects.bulk_create([
+            SubmissionCase(
+                submission=submission, case_index=index,
+                is_sample=bool(item.get("visible")),
+                name=str(item.get("name") if item.get("visible") else f"隐藏评分项 #{index}")[:64],
+                verdict="accepted" if item.get("score") == item.get("maxScore") else "wrong_answer",
+                output_excerpt=str(item.get("feedback") or "")[:EXCERPT_LIMIT]
+                if item.get("visible") else "",
+            ) for index, item in enumerate(items, 1)
+        ])
+    record_audit(submission.student, "submission.judged",
+                 f"{submission.id} project {score}分，待复核={pending}")
 
 
 @shared_task(bind=True, acks_late=True)

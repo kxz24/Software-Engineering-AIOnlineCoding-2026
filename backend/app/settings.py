@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -204,6 +205,17 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 # 判题沙箱镜像（由 backend/judge/Dockerfile 构建）
 JUDGE_IMAGE = os.environ.get("JUDGE_IMAGE", "aicoding-judge:latest")
+PROJECT_JUDGE_RUNTIMES = {"build-tools": os.environ.get(
+    "PROJECT_JUDGE_IMAGE", "aicoding-project-judge:latest"
+)}
+_extra_project_runtimes = json.loads(os.environ.get("PROJECT_JUDGE_RUNTIMES_JSON", "{}"))
+if (not isinstance(_extra_project_runtimes, dict) or
+        any(not isinstance(name, str) or not name or
+            not isinstance(image, str) or not image
+            for name, image in _extra_project_runtimes.items())):
+    raise ValueError("PROJECT_JUDGE_RUNTIMES_JSON must map runtime names to image names")
+PROJECT_JUDGE_RUNTIMES.update(_extra_project_runtimes)
+PROJECT_MANAGED_BASE_IMAGE = os.environ.get("PROJECT_MANAGED_BASE_IMAGE", "python:3.11-slim")
 # 测试环境可关掉入队，避免依赖 Redis
 JUDGE_ENQUEUE_ENABLED = os.environ.get("JUDGE_ENQUEUE_ENABLED", "1") == "1"
 # 单次判题的整体墙钟上限（秒），需小于 CELERY_TASK_TIME_LIMIT

@@ -94,6 +94,9 @@ services:
       - DJANGO_SETTINGS_MODULE=app.settings_prod
       - CELERY_BROKER_URL=redis://redis:6379/0
       - JUDGE_IMAGE=aicoding-judge:latest
+      - PROJECT_JUDGE_IMAGE=aicoding-project-judge:latest
+      - PROJECT_JUDGE_RUNTIMES_JSON=${PROJECT_JUDGE_RUNTIMES_JSON:-{}}
+      - PROJECT_MANAGED_BASE_IMAGE=${PROJECT_MANAGED_BASE_IMAGE:-python:3.11-slim}
     depends_on:
       mysql:
         condition: service_healthy
@@ -116,6 +119,15 @@ services:
     build:
       context: judge
       dockerfile: Dockerfile
+    profiles: ["build"]
+    restart: "no"
+    command: ["true"]
+
+  project-judge-base:
+    image: aicoding-project-judge:latest
+    build:
+      context: judge
+      dockerfile: ProjectDockerfile
     profiles: ["build"]
     restart: "no"
     command: ["true"]

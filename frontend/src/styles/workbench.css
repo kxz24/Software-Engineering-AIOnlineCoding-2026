@@ -104,7 +104,7 @@
     padding: 12px 14px 5px; font-size: 10.5px; font-weight: 600;
     color: #94a3b8; letter-spacing: .6px;
   }
-  .wb-root .tree { padding: 0 8px; }
+  .wb-root .tree { padding: 0 8px 8px; flex: 1; min-height: 0; overflow-y: auto; }
   .wb-root .tree-row {
     height: 30px; display: flex; align-items: center; gap: 6px;
     padding: 0 8px; border-radius: 6px;
@@ -113,6 +113,9 @@
   .wb-root .tree-row.lv2 { padding-left: 26px; }
   .wb-root .tree-row.lv3 { padding-left: 44px; }
   .wb-root .tree-row.root { font-weight: 600; color: #1e293b; }
+  .wb-root .tree-row.root { margin-top: 5px; cursor: pointer; }
+  .wb-root .tree-filename { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wb-root .tree-count { margin-left: auto; flex-shrink: 0; font-size: 10px; color: #94a3b8; }
   .wb-root .tree-row.active { background: #eff6ff; color: #1d4ed8; font-weight: 600; }
   .wb-root .folder-ico { color: #d97706; }
   .wb-root .file-ico { color: #94a3b8; }

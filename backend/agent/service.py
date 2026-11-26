@@ -16,7 +16,7 @@ from user.models import AuditLog
 from . import tools
 from .guard import GuardError, configured_reviewer
 from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level
-from .models import AgentMessage, AgentSession
+from .models import AgentMessage, AgentSession, WorkspaceFile
 from .policy import (asks_for_check_targets_only, extract_scope_targets, localized_request,
                      scoped_violation, sanitize_scoped_text,
                      trim_unrequested_list_tail)
@@ -80,6 +80,13 @@ def get_or_create_session(exam, student, problem):
             "prompt_version": getattr(settings, "AGENT_PROMPT_VERSION", "v1"),
         },
     )
+    if hasattr(problem, "project_bundle"):
+        for path, content in problem.project_bundle.public_files.items():
+            WorkspaceFile.objects.get_or_create(
+                exam=exam, student=student, problem=problem,
+                path=f"p{problem.id}/{path}",
+                defaults={"content": content, "revision": 1},
+            )
     return session
 
 
