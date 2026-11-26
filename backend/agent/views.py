@@ -340,7 +340,7 @@ class AgentMessageCreateView(APIView):
                     return Response({"message": "工作区版本号无效"}, status=400)
                 ensure_workspace(session, path, body, expected_revision=revision)
 
-        user_message = service.add_user_message(session, text)
+        user_message = service.add_user_message(session, text, action=turn_action)
 
         def stream():
             yield _sse("meta", {

@@ -16,7 +16,7 @@ ACTIVITIES = {"knowledge", "algorithm", "coding", "debugging", "other"}
 STUDENT_FIELDS = ("summary", "focus", "repeatedQuestions",
                   "independentWork", "limitations")
 
-REPORT_RULES = """你是考试对话的过程分析员。只根据给定对话，返回 JSON，不要 Markdown。
+REPORT_RULES = """你是考试对话的过程分析员。输入是 dialogue 与 observedWork；只根据输入返回 JSON，不要 Markdown。
 结构：{"turns":[{"userSeq":整数,"activity":"knowledge|algorithm|coding|debugging|other",
 "helpLevel":0到4的整数,"receivedLevel":0到4的整数,"evidence":"原话中的短摘录"}],
 "studentReport":{"summary":"按提问领域概述次数、主要问题和实际获得的回答",
@@ -24,6 +24,8 @@ REPORT_RULES = """你是考试对话的过程分析员。只根据给定对话�
 "independentWork":"有证据支持的自主完成部分，若无则说明无法判断",
 "limitations":"证据限制"}}。
 每条学生提问都要有一项；userSeq 必须来自输入中的学生消息。
+dialogue 中 requestedAction 是考生该轮显式选择的“只回答/运行/修改”授权，
+不等于助教实际运行或修改。实际动作只以 observedWork 的服务器记录为准。
 helpLevel 是学生请求的深度，receivedLevel 是助教实际给予的深度；
 0=无帮助，1=概念或思路，2=算法设计或调试方向，
 3=某个明确局部实现/修错，4=完整解法。不得把助教主动给得过多算成学生索取；
@@ -36,6 +38,7 @@ helpLevel 是学生请求的深度，receivedLevel 是助教实际给予的深�
 只有明确请求怎么改、怎么修时，局部修错的 helpLevel 才是 3。
 evidence 必须逐字摘自对应 userSeq 的学生提问，不能从助教回答中摘取。
 studentReport 只写学生问了什么、得到什么回答，以及有证据的学习活动；
+可以说明观察到的 AI 操作，但不能把考生授权当成已经完成的工作。
 按知识、算法、编程、调试等领域统计提问次数，聚焦具体主题，指出有无反复追问。
 面向学生时用“第几次提问”描述顺序，不暴露内部消息序号 userSeq 或 seq。
 不要写模型、提示词、审查、规则、系统是否合规，也不要比较 helpLevel 与 receivedLevel；
@@ -43,11 +46,35 @@ studentReport 只写学生问了什么、得到什么回答，以及有证据的
 不能据此断言学生已经学会、存在作弊或给出最终成绩。"""
 
 
-def build_help_report(messages, provider):
+def _work_summary(observed_work):
+    changes = observed_work.get("aiChanges") or []
+    runs = int(observed_work.get("successfulRuns") or 0)
+    submissions = observed_work.get("submissions") or []
+    parts = []
+    if changes:
+        paths = sorted({item["path"] for item in changes})
+        reverted = sum(item.get("status") == "reverted" for item in changes)
+        parts.append(f"记录到 AI 修改 {len(changes)} 次，涉及文件：{'、'.join(paths[:12])}"
+                     + (f"；其中 {reverted} 次已撤销" if reverted else ""))
+    else:
+        parts.append("没有记录到 AI 文件修改")
+    parts.append(f"运行验证 {runs} 次" if runs else "没有记录到成功的程序运行验证")
+    if submissions:
+        latest = submissions[0]
+        parts.append(f"正式提交 {len(submissions)} 次，最近一次结果为 {latest['verdict']}")
+    else:
+        parts.append("没有记录到正式提交")
+    return "；".join(parts) + "。平台未记录每次人工编辑的来源，不能据此判断学生独立写了哪些代码。"
+
+
+def build_help_report(messages, provider, observed_work=None):
     """Return a validated draft report; never infer mastery or a score."""
+    observed_work = observed_work or {}
     dialogue = [
         {"seq": int(item["seq"]), "role": item["role"],
-         "content": str(item.get("content") or "")}
+         "content": str(item.get("content") or ""),
+         **({"requestedAction": item.get("requested_action") or "answer"}
+            if item["role"] == "user" else {})}
         for item in messages if item["role"] in ("user", "assistant")
     ]
     user_seqs = {item["seq"] for item in dialogue if item["role"] == "user"}
@@ -55,7 +82,9 @@ def build_help_report(messages, provider):
         raise ReportError("会话没有学生提问")
     payload = [
         {"role": "system", "content": REPORT_RULES},
-        {"role": "user", "content": json.dumps(dialogue, ensure_ascii=False)},
+        {"role": "user", "content": json.dumps({
+            "dialogue": dialogue, "observedWork": observed_work,
+        }, ensure_ascii=False)},
     ]
     parts = []
     try:
@@ -113,9 +142,11 @@ def build_help_report(messages, provider):
         counts[turn["activity"]] += 1
     return {
         "studentReport": {**{key: student_report[key] for key in STUDENT_FIELDS},
-                          "activityCounts": counts},
+                          "activityCounts": counts,
+                          "workSummary": _work_summary(observed_work)},
         "systemReview": {
             "turns": turns,
+            "observedWork": observed_work,
             "overHelpUserSeqs": [turn["userSeq"] for turn in turns
                                  if turn["receivedLevel"] > turn["helpLevel"]],
             "underHelpUserSeqs": [turn["userSeq"] for turn in turns
@@ -135,5 +166,18 @@ def report_for_session(session):
                     if getattr(settings, "AGENT_REPORT_DISABLE_THINKING", True) else None),
     )
     messages = list(session.messages.filter(role__in=("user", "assistant"))
-                    .order_by("seq").values("seq", "role", "content"))
-    return build_help_report(messages, provider)
+                    .order_by("seq").values("seq", "role", "content", "requested_action"))
+    changes = list(session.code_changes.order_by("created").values("file_path", "status")[:200])
+    from exam.models import Submission
+    submissions = list(Submission.objects.filter(
+        exam=session.exam, student=session.student, problem=session.problem,
+        created__gte=session.created,
+    ).order_by("-created").values("verdict")[:20])
+    observed_work = {
+        "aiChanges": [{"path": item["file_path"], "status": item["status"]}
+                      for item in changes],
+        "successfulRuns": session.tool_calls.filter(
+            name__in=("run_sample_tests", "harness_command"), ok=True).count(),
+        "submissions": submissions,
+    }
+    return build_help_report(messages, provider, observed_work=observed_work)

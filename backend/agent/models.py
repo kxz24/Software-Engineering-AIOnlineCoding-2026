@@ -86,6 +86,8 @@ class AgentMessage(models.Model):
     seq = models.PositiveIntegerField()
     role = models.CharField(max_length=10, choices=ROLE_CHOICES)
     content = models.TextField(blank=True, default="")
+    # 学生本轮实际授予的能力；仅 user 消息使用。
+    requested_action = models.CharField(max_length=8, blank=True, default="answer")
     # assistant 消息里的 tool_calls 原样保留（OpenAI 兼容格式）
     tool_calls = models.JSONField(null=True, blank=True)
     tool_call_id = models.CharField(max_length=64, blank=True, default="")
