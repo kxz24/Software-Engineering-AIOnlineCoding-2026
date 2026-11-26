@@ -71,6 +71,18 @@ EXPOSE 8000
 CMD ["gunicorn", "-w4", "-b", "0.0.0.0:8000", "--timeout", "300", "--log-level=debug", "app.wsgi"]
 
 
+# Coding harness worker: separate image so Django and judge do not carry LiteLLM.
+FROM python:3.11-slim AS agent_worker
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 DJANGO_SETTINGS_MODULE=app.settings_prod
+WORKDIR /code
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc default-libmysqlclient-dev pkg-config docker-cli \
+    && rm -rf /var/lib/apt/lists/*
+COPY backend/requirements.txt backend/requirements-harness.txt /code/
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-harness.txt
+COPY backend/ /code/
+
+
 # ---------------------------------------------------------------------------
 # 阶段三：Nginx（target: nginx）
 # ---------------------------------------------------------------------------

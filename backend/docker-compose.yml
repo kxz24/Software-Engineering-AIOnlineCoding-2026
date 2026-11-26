@@ -51,6 +51,7 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       - AGENT_MODEL=${AGENT_MODEL:-deepseek-chat}
+      - AGENT_PROJECT_HARNESS_ENABLED=${AGENT_PROJECT_HARNESS_ENABLED:-0}
     # 等 MySQL 健康检查通过（数据库完成初始化）之后再启动，避免连接被拒绝
     depends_on:
       mysql:
@@ -110,6 +111,33 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - web_network
+      - db_network
+
+  agent-worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      target: agent_worker
+    restart: always
+    environment:
+      - DJANGO_SETTINGS_MODULE=app.settings_prod
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - AGENT_MODEL=${AGENT_MODEL:-deepseek-chat}
+      - AGENT_HARNESS_MODEL=${AGENT_HARNESS_MODEL:-DeepSeek-V4.1-Flash-1017}
+      - AGENT_HARNESS_MAX_STEPS=${AGENT_HARNESS_MAX_STEPS:-20}
+      - AGENT_HARNESS_WALL_SECONDS=${AGENT_HARNESS_WALL_SECONDS:-600}
+      - PROJECT_JUDGE_IMAGE=aicoding-project-judge:latest
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: celery -A app worker -Q agent -l info -c 3 --max-tasks-per-child=10
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
       - db_network
 
   # 判题沙箱基础镜像的构建入口（只在需要时显式构建）：

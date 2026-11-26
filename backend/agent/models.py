@@ -109,6 +109,32 @@ class AgentMessage(models.Model):
         return f"#{self.session_id}-{self.seq} {self.role}"
 
 
+class AgentHarnessJob(models.Model):
+    """An explicitly authorized project run or edit executed by the agent worker."""
+
+    STATUS_QUEUED = "queued"
+    STATUS_RUNNING = "running"
+    STATUS_DONE = "done"
+    STATUS_FAILED = "failed"
+    STATUS_CANCELLED = "cancelled"
+
+    session = models.ForeignKey(AgentSession, on_delete=models.CASCADE,
+                                related_name="harness_jobs")
+    user_message = models.OneToOneField(AgentMessage, on_delete=models.CASCADE,
+                                        related_name="harness_job")
+    action = models.CharField(max_length=8)
+    scope = models.CharField(max_length=8, default="file")
+    target_path = models.CharField(max_length=128, blank=True, default="")
+    status = models.CharField(max_length=8, default=STATUS_QUEUED)
+    steps = models.PositiveIntegerField(default=0)
+    result = models.TextField(blank=True, default="")
+    error = models.TextField(blank=True, default="")
+    input_tokens = models.PositiveBigIntegerField(default=0)
+    output_tokens = models.PositiveBigIntegerField(default=0)
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+
 class AgentToolCall(models.Model):
     """一次工具调用；与消息分开存，便于统计与排查。"""
 

@@ -49,6 +49,8 @@ studentReport 只写学生问了什么、得到什么回答，以及有证据的
 def _work_summary(observed_work):
     changes = observed_work.get("aiChanges") or []
     runs = int(observed_work.get("successfulRuns") or 0)
+    harness_runs = int(observed_work.get("harnessRunRequests") or 0)
+    harness_steps = int(observed_work.get("harnessSteps") or 0)
     submissions = observed_work.get("submissions") or []
     parts = []
     if changes:
@@ -59,6 +61,10 @@ def _work_summary(observed_work):
     else:
         parts.append("没有记录到 AI 文件修改")
     parts.append(f"运行验证 {runs} 次" if runs else "没有记录到成功的程序运行验证")
+    if harness_steps:
+        parts.append(f"工程助手共执行 {harness_steps} 步操作")
+    if harness_runs:
+        parts.append(f"工程运行请求 {harness_runs} 次；完成请求不代表构建成功")
     if submissions:
         latest = submissions[0]
         parts.append(f"正式提交 {len(submissions)} 次，最近一次结果为 {latest['verdict']}")
@@ -177,7 +183,10 @@ def report_for_session(session):
         "aiChanges": [{"path": item["file_path"], "status": item["status"]}
                       for item in changes],
         "successfulRuns": session.tool_calls.filter(
-            name__in=("run_sample_tests", "harness_command"), ok=True).count(),
+            name="run_sample_tests", ok=True).count(),
+        "harnessRunRequests": session.harness_jobs.filter(
+            action="run", status="done").count(),
+        "harnessSteps": sum(session.harness_jobs.values_list("steps", flat=True)),
         "submissions": submissions,
     }
     return build_help_report(messages, provider, observed_work=observed_work)
