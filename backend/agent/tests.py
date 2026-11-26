@@ -23,7 +23,7 @@ from .levels import TOOLS_BY_LEVEL
 from .policy import CODE_BLOCK_PLACEHOLDER, conservative_violation, sanitize_advise_text
 from .guard import GuardError
 from .providers import DeepSeekProvider, _extract_usage, thinking_off_body
-from .models import AgentMessage, AgentSession, CodeChange, WorkspaceFile
+from .models import AgentHarnessJob, AgentMessage, AgentSession, CodeChange, WorkspaceFile
 
 
 class RoundProvider:
@@ -1106,6 +1106,96 @@ class ToolPermissionTests(AgentBaseTestCase):
         self.assertEqual(len(denied), 1)
         self.assertFalse(denied[0]["ok"])
         self.assertFalse(WorkspaceFile.objects.exists())
+
+
+class ProjectHarnessRoutingTests(AgentBaseTestCase):
+    def setUp(self):
+        super().setUp()
+        self.problem.type = Problem.TYPE_ENGINEERING
+        self.problem.save(update_fields=["type"])
+        ProjectBundle.objects.create(
+            problem=self.problem, archive=b"demo", runtime="build-tools",
+            grader_command=["true"], public_files={"main.py": "print(1)\n"},
+        )
+
+    @override_settings(AGENT_PROJECT_HARNESS_ENABLED=True)
+    def test_edit_job_requires_open_mode_and_explicit_scope(self):
+        limited = service.get_or_create_session(self.exam, self.student, self.problem)
+        self.auth()
+        url = f"/api/v1/agent/sessions/{limited.id}/messages"
+        payload = {"content": "请修改当前文件", "action": "edit",
+                   "activeFile": f"p{self.problem.id}/main.py", "scope": "file"}
+        self.assertEqual(self.client.post(url, payload, format="json").status_code, 403)
+        self.assertFalse(AgentHarnessJob.objects.exists())
+
+        open_exam = self.create_exam(Exam.AI_OPEN)
+        session = service.get_or_create_session(open_exam, self.student, self.problem)
+        url = f"/api/v1/agent/sessions/{session.id}/messages"
+        with patch("agent.tasks.run_agent_harness_job.apply_async") as enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, 202)
+        job = AgentHarnessJob.objects.get(id=response.json()["jobId"])
+        self.assertEqual(job.action, "edit")
+        self.assertEqual(job.target_path, payload["activeFile"])
+        self.assertEqual(job.user_message.requested_action, "edit")
+        enqueue.assert_called_once_with(args=[job.id], queue="agent")
+        self.assertEqual(self.client.get(
+            f"/api/v1/agent/sessions/{session.id}/jobs/{job.id}").status_code, 200)
+        stopped = self.client.post(
+            f"/api/v1/agent/sessions/{session.id}/jobs/{job.id}/cancel",
+            {}, format="json")
+        self.assertEqual(stopped.status_code, 200)
+        self.assertEqual(stopped.json()["status"], AgentHarnessJob.STATUS_CANCELLED)
+        from .tasks import run_agent_harness_job
+        with patch("agent.harness.execute_project_job") as execute:
+            run_agent_harness_job.run(job.id)
+        execute.assert_not_called()
+        self.auth(self.other_token)
+        self.assertEqual(self.client.get(
+            f"/api/v1/agent/sessions/{session.id}/jobs/{job.id}").status_code, 404)
+
+
+class ProjectHarnessArchiveTests(SimpleTestCase):
+    def test_failed_build_request_is_not_counted_as_success(self):
+        from .report import _work_summary
+
+        summary = _work_summary({
+            "successfulRuns": 0, "harnessRunRequests": 1,
+        })
+        self.assertIn("工程运行请求 1 次", summary)
+        self.assertIn("不代表构建成功", summary)
+
+    def test_only_public_text_changes_are_returned(self):
+        from .harness import _changed_public_files, _stage_archive
+        import io
+        import tarfile
+
+        snapshot = {"src/main.py": ("print(1)\n", 1),
+                    "README.md": ("instructions", 1)}
+        payload = _stage_archive(snapshot)
+        with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+            self.assertEqual(set(archive.getnames()), set(snapshot))
+        changed = _stage_archive({**snapshot, "src/main.py": ("print(2)\n", 1)})
+        self.assertEqual(_changed_public_files(changed, snapshot),
+                         {"src/main.py": "print(2)\n"})
+
+    def test_missing_or_linked_public_file_is_rejected(self):
+        from .harness import _changed_public_files, _stage_archive
+        import io
+        import tarfile
+
+        snapshot = {"src/main.py": ("print(1)\n", 1)}
+        with self.assertRaises(RuntimeError):
+            _changed_public_files(_stage_archive({}), snapshot)
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w") as archive:
+            info = tarfile.TarInfo("src/main.py")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "/etc/passwd"
+            archive.addfile(info)
+        with self.assertRaises(RuntimeError):
+            _changed_public_files(data.getvalue(), snapshot)
 
 
 class WorkspaceAndSummaryTests(AgentBaseTestCase):
