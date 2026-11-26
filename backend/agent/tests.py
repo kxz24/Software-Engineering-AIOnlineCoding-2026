@@ -14,7 +14,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from exam.models import Exam, ExamProblem
-from problem.models import Problem
+from problem.models import Problem, ProjectBundle
 from user.models import AuditLog, User
 from utils.jwt import encrypt_password
 
@@ -1067,6 +1067,34 @@ class ToolPermissionTests(AgentBaseTestCase):
 
 
 class WorkspaceAndSummaryTests(AgentBaseTestCase):
+    def test_project_prompt_lists_files_without_embedding_entire_workspace(self):
+        ProjectBundle.objects.create(
+            problem=self.problem, archive=b"demo", runtime="build-tools",
+            grader_command=["true"],
+            public_files={f"src/file_{index}.py": "PRIVATE_MARKER_" + "x" * 9000
+                          for index in range(50)},
+        )
+        session = service.get_or_create_session(self.exam, self.student, self.problem)
+        prompt = service._system_prompt(session)
+        self.assertIn(f"p{self.problem.id}/src/file_0.py", prompt)
+        self.assertNotIn("PRIVATE_MARKER_", prompt)
+        self.assertLess(len(prompt), 30000)
+        context = tools.ToolContext(session, lambda *_: None)
+        ok, result = tools.execute_tool("read_workspace", {}, context, session)
+        self.assertFalse(ok)
+        self.assertIn("指定文件路径", result)
+        first_ok, first = tools.execute_tool("list_files", {}, context, session)
+        second_ok, second = tools.execute_tool(
+            "list_files", {"offset": 40}, context, session)
+        self.assertTrue(first_ok and second_ok)
+        self.assertEqual(len(__import__("json").loads(first)["files"]), 40)
+        self.assertEqual(len(__import__("json").loads(second)["files"]), 10)
+        path = f"p{self.problem.id}/src/file_0.py"
+        part_ok, part = tools.execute_tool(
+            "read_workspace", {"path": path, "offset": 6000}, context, session)
+        self.assertTrue(part_ok)
+        self.assertEqual(__import__("json").loads(part)["files"][0]["offset"], 6000)
+
     def test_workspace_optimistic_lock(self):
         self.auth()
         first = self.client.put(
