@@ -21,8 +21,8 @@ from .harness_scope import (ScopeReviewError, configured_scope_provider,
 from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level, tools_for_turn
 from .models import AgentMessage, AgentSession, AgentToolCall, WorkspaceFile
 from .policy import (asks_for_check_targets_only, extract_scope_targets, localized_request,
-                     scoped_violation, sanitize_scoped_text,
-                     trim_unrequested_list_tail)
+                     scoped_violation, sanitize_scoped_text, single_file_status_request,
+                     trim_unrequested_list_tail, unverified_file_status_claim)
 from .providers import ProviderError, get_provider, provider_info
 
 logger = logging.getLogger(__name__)
@@ -199,7 +199,8 @@ def _system_prompt(session):
             "解释新概念时，假设考生可能完全没学过：先用日常语言说清它是什么、为什么有用，"
             "必要时用一个很小的数字例子解释，再联系本题当前操作。"
             "让解释足以听懂，但一个例子已经说明时就停止，不主动引入后续数据结构、"
-            "通用更新规则、查询路径或整题做法。"
+            "通用更新规则、查询路径或整题做法；只问概念关系时不追加具体语言、"
+            "框架或其他模块的实现细节。"
             "问算法构思或某步骤的作用时，讲清所问结构的作用和原因，不主动展开实现流程；"
             "除非学生要求举例，否则不为已有步骤另编数字例子。"
             "如果只问应关注哪些部分或检查哪些情况，指出这些对象及其重要性即可；"
@@ -241,6 +242,8 @@ def _system_prompt(session):
 【通用边界】先识别学生当前真正请求的是解释、诊断、实现、修改还是运行。
 询问现状、原因或思路不授权你完成任务；不得因为某一步看起来有帮助就主动推进。
 只回答问题所需，任何工具行动须同时满足当前考试级别和本轮授权。
+若只问已有工程文件做了什么，用几句话概括当前代码可观察的结构和作用；
+可以解释学生自己写出的代码，但不要补写实现、预测未运行的结果或追加下一步建议。
 {SCOPE_EXAMPLES}
 
 题目：{problem.title}
@@ -333,10 +336,28 @@ def _open_scope_issue(question, answer):
             and re.search(r"题面|题目要求|编译|汇编(?:后|产物|结果)|构建|运行后|测试结果", answer)):
         return ("学生限定只依据当前文件；只保留文件中可直接观察的内容和据此得出的结论，"
                 "删除题目要求、其他来源及未经运行的结果推断。")
+    if unverified_file_status_claim(question, answer):
+        return "学生只问当前内容；删除未经实际执行的编译、运行或测试结果推断。"
     overview = re.search(r"大致|思路|概念|是什么|含义|作用|为什么|哪些阶段|原理|概览", question)
     implementation = re.search(r"代码|怎么写|怎么改|实现|命令|运行|修改|修复|完整解", question)
     if overview and not implementation and "```" in answer:
         return "学生只问解释或概览；删除未请求的代码块和实现步骤。"
+    return ""
+
+
+def _review_workspace_excerpt(session, question):
+    """Give the reviewer one named public file, never the whole project or hidden files."""
+    if not single_file_status_request(question):
+        return ""
+    matches = []
+    for file in tools.workspace_files(session):
+        basename = file.path.rsplit("/", 1)[-1]
+        if re.search(r"(?<![A-Za-z0-9_.])" + re.escape(basename)
+                     + r"(?![A-Za-z0-9_.])", question):
+            matches.append(file)
+    if len(matches) == 1:
+        file = matches[0]
+        return f"{file.path} (revision {file.revision}):\n{file.content[:6000]}"
     return ""
 
 
@@ -452,6 +473,20 @@ def generate_events(session, provider=None, reviewer=None, turn_action="answer")
         reviewer.problem_context = (session.problem.description or "")[:3000]
     question = (session.messages.filter(role=AgentMessage.ROLE_USER)
                 .order_by("-seq").values_list("content", flat=True).first() or "")
+    if single_file_status_request(question):
+        context[0]["content"] += (
+            "\n【本轮文件状态问答】请用两到四句中文概括现有代码的结构和作用。"
+            "允许解释学生已写的代码，但不逐行拆解、不建议下一步，"
+            "不声称未经执行的编译或运行结果。"
+        )
+    elif (re.search(r"关系|区别|联系", question)
+          and not re.search(r"举例|例子|具体代码|怎么写", question)):
+        context[0]["content"] += (
+            "\n【本轮概念关系问答】用几句话解释所问概念各指什么、彼此如何关联即可。"
+            "学生没有要求数字例子，不必自拟地址或数值，也不延伸到实现陷阱和其他模块。"
+        )
+    if reviewer is not None and hasattr(reviewer, "workspace_context"):
+        reviewer.workspace_context = _review_workspace_excerpt(session, question)
     if redact_code and asks_for_check_targets_only(question):
         context[0]["content"] += (
             "\n【本轮回答范围】只需列出检查对象。"

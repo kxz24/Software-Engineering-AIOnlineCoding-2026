@@ -66,6 +66,17 @@ commandSamples 只能证明命令被执行以及截取到的输出，不能仅�
 activity=coding 用于直接请求编写、实现或修改源码文件，即使涉及算法或处理器设计；
 activity=algorithm 仅用于询问方案、原理、复杂度或设计选择而没有要求直接写入源码。
 任务失败不改变学生当初请求的活动类别。
+observedWork.submissions 的 verdict 是整道题或整份工程的汇总结果；visibleCases 只包含可公开的评分项。
+叙述验证结果时，应优先区分各公开评分项的通过情况与总体结果。总体 partial 不能单独证明
+学生当前修改的文件有缺陷，也不能证明未通过的评分项由谁编写或为何失败。
+如果没有对应评分项或运行输出的证据，不要猜测某个文件可能有错误；可以如实说明原因尚不明确。
+评分项未通过只说明该评分项未达到要求，不等于学生已尝试或独立完成过对应任务。
+例如学生只改了模块甲，公开评分项甲通过、乙未通过：应说“甲已通过，乙未通过；对话没有
+乙的实现或求助记录”，不能说“学生在乙遇到了困难”“学生的甲仍可能有问题”。
+学生说“我写了文件”只能记录为学生自述；除非有可核实的人工编辑来源，不要改写成
+“学生自行编写/独立完成”。
+如果助教解释了工作区文件，可以说“助教解释了工作区中的文件”；不要把文件说成
+学生在对话里贴出的代码，也不要推测文件的作者或来源。
 """
 
 
@@ -201,6 +212,19 @@ def build_help_report_with_retry(messages, provider, observed_work=None):
             logger.warning("报告首稿无效，重试一次")
 
 
+def _submission_evidence(submission):
+    """Give the report only the same named grading items visible to a student."""
+    return {
+        "verdict": submission.verdict,
+        "passedCount": submission.passed_count,
+        "totalCount": submission.total_count,
+        "visibleCases": [
+            {"name": case.name, "verdict": case.verdict}
+            for case in submission.cases.all() if case.is_sample
+        ][:30],
+    }
+
+
 def report_for_session(session):
     model = getattr(settings, "AGENT_REPORT_MODEL", "Qwen3.8-Flash")
     provider = DeepSeekProvider(
@@ -215,10 +239,12 @@ def report_for_session(session):
                     .order_by("seq").values("seq", "role", "content", "requested_action"))
     changes = list(session.code_changes.order_by("created").values("file_path", "status")[:200])
     from exam.models import Submission
-    submissions = list(Submission.objects.filter(
+    submission_records = list(Submission.objects.filter(
         exam=session.exam, student=session.student, problem=session.problem,
         created__gte=session.created,
-    ).order_by("-created").values("verdict")[:20])
+    ).order_by("-created").prefetch_related("cases")[:20])
+    submissions = [_submission_evidence(submission)
+                   for submission in submission_records]
     harness_jobs = []
     for job in session.harness_jobs.order_by("created")[:30]:
         commands = list(session.tool_calls.filter(

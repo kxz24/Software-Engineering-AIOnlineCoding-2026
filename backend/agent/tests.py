@@ -5,6 +5,7 @@
 工具不在这里跑（需要 Docker），只验证权限与落库。
 """
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -182,9 +183,11 @@ class AdviseGuardTests(SimpleTestCase):
         )])
         reviewer = AnswerReviewer(provider)
         reviewer.problem_context = "判断能否使序列不再严格递增，输出 Yes 或 No。"
+        reviewer.workspace_context = "main.py: 已有函数定义"
         reviewer.review("这里为什么输出 Yes？", "因为存在一对逆序。")
         payload = json.loads(provider.requests[0][1]["content"])
         self.assertEqual(payload["problem"], reviewer.problem_context)
+        self.assertEqual(payload["workspace"], reviewer.workspace_context)
         self.assertEqual(payload["question"], "这里为什么输出 Yes？")
 
     def test_reviewer_rejects_usable_logic_even_in_inline_prose(self):
@@ -209,10 +212,23 @@ class AdviseGuardTests(SimpleTestCase):
 
     def test_scope_examples_cover_question_diagnosis_implementation_and_execution(self):
         from .guard import SCOPE_EXAMPLES, SCOPE_RULES
-        for text in ("现在做什么", "为什么报错", "大体思路", "实现这个函数", "运行测试"):
+        for text in ("现在做什么", "为什么报错", "大体思路", "实现这个函数", "运行测试",
+                     "这个模块有哪些文件", "这份构建日志为什么失败", "请完成这个模块"):
             self.assertIn(text, SCOPE_EXAMPLES)
         self.assertIn("只有明确请求实现", SCOPE_RULES)
         self.assertIn("问题的自然含义", SCOPE_RULES)
+        self.assertIn("其他模块", SCOPE_RULES)
+
+    def test_file_status_question_rejects_unverified_build_result(self):
+        from .policy import scoped_violation
+        from .service import _open_scope_issue
+        question = "这个工程文件目前实现了什么？"
+        answer = "它只有占位注释，因此无法汇编成可运行文件。"
+        self.assertIn("未经实际执行", scoped_violation(question, answer))
+        self.assertIn("未经实际执行", _open_scope_issue(question, answer))
+        self.assertIn("未经实际执行", scoped_violation(
+            "Part A 的 sum.ys 目前实现了什么？",
+            "如果交给汇编器，得到的不可能是能完成任务的程序。"))
 
     def test_file_only_answer_rejects_unverified_build_claim(self):
         from .service import _open_scope_issue
@@ -356,6 +372,22 @@ class AdviseGuardTests(SimpleTestCase):
                          "p1/main.py")
         self.assertEqual(result["systemReview"]["observedWork"]["successfulRuns"], 1)
         self.assertEqual(provider.requests[0][1]["content"].count('"requestedAction": "run"'), 1)
+
+    def test_report_submission_evidence_keeps_only_visible_grading_items(self):
+        from .report import _submission_evidence
+
+        cases = [
+            SimpleNamespace(name="公开模块", verdict="accepted", is_sample=True),
+            SimpleNamespace(name="隐藏模块", verdict="wrong_answer", is_sample=False),
+        ]
+        submission = SimpleNamespace(
+            verdict="partial", passed_count=1, total_count=2,
+            cases=SimpleNamespace(all=lambda: cases),
+        )
+        self.assertEqual(_submission_evidence(submission), {
+            "verdict": "partial", "passedCount": 1, "totalCount": 2,
+            "visibleCases": [{"name": "公开模块", "verdict": "accepted"}],
+        })
 
     def test_report_counts_requested_target_list_as_sufficient_help(self):
         from .report import build_help_report
@@ -730,6 +762,14 @@ class SessionAndMessageTests(AgentBaseTestCase):
 
 
 class ToolPermissionTests(AgentBaseTestCase):
+    def test_relation_question_gets_narrow_prompt_without_requiring_example(self):
+        session = self.create_session()
+        service.add_user_message(session, "这两个概念有什么关系？")
+        provider = RoundProvider([text_round("前者表示当前对象，后者表示下一对象。")])
+        list(service.generate_events(session, provider=provider, turn_action="answer"))
+        self.assertIn("【本轮概念关系问答】", provider.requests[0][0]["content"])
+        self.assertIn("不必自拟地址或数值", provider.requests[0][0]["content"])
+
     def test_open_explanation_does_not_turn_into_implementation(self):
         session = self.create_session(self.create_exam(Exam.AI_OPEN))
         service.add_user_message(session, "这段程序目前在做什么？")
@@ -1240,6 +1280,17 @@ class ProjectHarnessRoutingTests(AgentBaseTestCase):
             grader_command=["true"], public_files={"main.py": "print(1)\n"},
         )
 
+    def test_file_status_reviewer_gets_only_exact_named_public_file(self):
+        session = service.get_or_create_session(self.create_exam(Exam.AI_OPEN),
+                                                self.student, self.problem)
+        WorkspaceFile.objects.create(
+            exam=session.exam, student=self.student, problem=self.problem,
+            path=f"p{self.problem.id}/rmain.py", content="other", revision=1)
+        excerpt = service._review_workspace_excerpt(session, "main.py 目前做了什么？")
+        self.assertIn("main.py", excerpt)
+        self.assertIn("print(1)", excerpt)
+        self.assertNotIn("other", excerpt)
+
     @override_settings(AGENT_PROJECT_HARNESS_ENABLED=True)
     def test_edit_job_requires_open_mode_and_explicit_scope(self):
         limited = service.get_or_create_session(self.exam, self.student, self.problem)
@@ -1319,6 +1370,21 @@ class ProjectHarnessRoutingTests(AgentBaseTestCase):
 
 
 class ProjectHarnessArchiveTests(SimpleTestCase):
+    def test_run_review_allows_requested_build_but_edit_review_does_not(self):
+        from .harness_scope import COMMAND_RULES, review_command_scope
+        provider = RoundProvider([text_round('{"allowed":true,"feedback":""}')])
+        allowed, _, _ = review_command_scope(
+            "请编译并运行当前工程文件", "run", "project", "",
+            "cd /workspace/sim/misc && make yas yis", provider)
+        self.assertTrue(allowed)
+        self.assertEqual(provider.calls, 1)
+        self.assertIn('run + "compile and run this file"', COMMAND_RULES)
+        denied, _, _ = review_command_scope(
+            "请完成当前工程文件", "edit", "file", "PartA/sum.ys",
+            "make yas yis", provider)
+        self.assertFalse(denied)
+        self.assertEqual(provider.calls, 1)
+
     def test_harness_prompt_is_chinese_and_does_not_auto_run_after_edit(self):
         from .harness import INSTANCE_TEMPLATE, SYSTEM_TEMPLATE
         self.assertIn("始终用中文回答", SYSTEM_TEMPLATE)

@@ -374,7 +374,7 @@ class MySubmissionView(APIView):
         problem = Problem.objects.filter(pk=kwargs.get("problem_id")).first()
         if problem and hasattr(problem, "project_bundle"):
             files = content.get("files")
-            if not isinstance(files, dict) or not files or len(files) > 100:
+            if not isinstance(files, dict) or len(files) > 100:
                 return Response({"message": "工程题需要提交文件对象（上限 100 个）"}, status=400)
             from problem.project_package import ProjectPackageError, safe_name
             import json

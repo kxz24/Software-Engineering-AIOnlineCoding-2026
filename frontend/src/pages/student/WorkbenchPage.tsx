@@ -685,18 +685,20 @@ export function WorkbenchPage() {
             toast(`本题提交次数已用完（上限 ${detail.submitLimit} 次）`, "warning");
             return;
         }
+        const projectFiles = problem.publicFiles ? Object.fromEntries(
+            Object.entries(problem.publicFiles)
+                .filter(([name, original]) => (contents[`p${problem.problemId}/${name}`] ?? original) !== original)
+                .map(([name, original]) => [name, contents[`p${problem.problemId}/${name}`] ?? original])
+        ) : undefined;
         const confirmed = window.confirm(
             `确认提交「任务 ${problem.order + 1}：${problem.title}」？\n` +
-            (problem.publicFiles ? `本次将一并提交 ${Object.keys(problem.publicFiles).length} 个文件。\n` : "") +
+            (projectFiles ? `本次提交 ${Object.keys(projectFiles).length} 个修改文件，其他文件沿用题包初始版本。\n` : "") +
             `提交后在后台自动判题，本题剩余 ${remaining - 1} 次机会。`
         );
         if (!confirmed) {
             return;
         }
         setSubmitting(true);
-        const projectFiles = problem.publicFiles ? Object.fromEntries(
-            Object.keys(problem.publicFiles).map(name => [name, contents[`p${problem.problemId}/${name}`] ?? ""])
-        ) : undefined;
         submitCode(detail.id, problem.problemId, currentCode, problem.language, projectFiles)
             .then(result => {
                 setSubmitting(false);

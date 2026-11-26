@@ -203,10 +203,33 @@ def _single_fenced_line(text):
     return body[0]
 
 
+def single_file_status_request(question):
+    """Recognize a concise question about one existing file's current behavior."""
+    if re.search(r"详细|逐行|展开|完整分析", question):
+        return False
+    return bool(re.search(
+        r"(?:目前|当前|现在).{0,24}(?:文件|代码|程序|模块|实现|做了什么|作用|状态)|"
+        r"(?:文件|代码|程序|模块|[A-Za-z_][\w.-]*\.[A-Za-z0-9]+).{0,24}"
+        r"(?:目前|当前|现在|作用)", question))
+
+
+def unverified_file_status_claim(question, text):
+    """A file-status question does not establish a build or execution result."""
+    status_question = single_file_status_request(question)
+    execution_claim = re.search(
+        r"(?:不能|无法|不可能|可能|可以|能够|会|将|不会).{0,30}"
+        r"(?:汇编|编译|构建|运行|通过测试)|"
+        r"(?:汇编|编译|构建|运行|测试).{0,70}"
+        r"(?:不可能|可能|会|将|得到|失败|成功|通过|产物)", text)
+    return bool(status_question and execution_claim)
+
+
 def scoped_violation(question, text):
     """Experimental mode: allow one local line only when explicitly requested."""
     text = str(text or "")
     issues = []
+    if unverified_file_status_claim(question, text):
+        issues.append("学生询问当前内容；删除未经实际执行的编译、运行或测试结果推断。")
     if len(text) > 750:
         issues.append("回答过长；只解释当前问题，概念题最多用一个小例子。")
     if _unrequested_case_verdicts(question, text):
