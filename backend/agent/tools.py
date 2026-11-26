@@ -112,11 +112,14 @@ TOOL_SPECS = {
 }
 
 
-def tool_specs_for(level):
+def tool_specs_for(level, allowed_tools=None):
     """按级别返回工具 schema 列表；无 AI 级别返回空列表。"""
     from .levels import tools_for_level
 
-    return [TOOL_SPECS[name] for name in tools_for_level(level) if name in TOOL_SPECS]
+    names = tools_for_level(level)
+    if allowed_tools is not None:
+        names = [name for name in names if name in allowed_tools]
+    return [TOOL_SPECS[name] for name in names if name in TOOL_SPECS]
 
 
 # ---------------------------------------------------------------------------
@@ -405,10 +408,12 @@ _EXECUTORS = {
 }
 
 
-def execute_tool(name, arguments, context, session, call_id=""):
+def execute_tool(name, arguments, context, session, call_id="", allowed_tools=None):
     """执行一次工具调用，返回 (ok, result_text)，并落 AgentToolCall 记录。"""
     started = time.monotonic()
     allowed = set(tools_for_level(session.level))
+    if allowed_tools is not None:
+        allowed.intersection_update(allowed_tools)
     if name not in allowed or name not in _EXECUTORS:
         result = _tool_error(f"当前级别不可用工具: {name}")
         ok = False

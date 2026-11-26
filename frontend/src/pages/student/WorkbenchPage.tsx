@@ -342,6 +342,7 @@ export function WorkbenchPage() {
     // path -> 服务端工作区版本号；发送消息时带上，后端据此决定是否用编辑器内容覆盖
     const [agentRevisions, setAgentRevisions] = useState<Record<string, number>>({});
     const [agentDraft, setAgentDraft] = useState("");
+    const [agentAction, setAgentAction] = useState<"answer" | "run" | "edit">("answer");
     const [agentTab, setAgentTab] = useState<"chat" | "changes">("chat");
     const agentAbortRef = useRef<AbortController | null>(null);
 
@@ -478,6 +479,7 @@ export function WorkbenchPage() {
         setAgentError(null);
         setAgentDisabledReason("");
         setAgentTab("chat");
+        setAgentAction("answer");
         setAgentRevisions({});
         if (detail && problem) {
             loadAgent();
@@ -586,6 +588,7 @@ export function WorkbenchPage() {
 
         streamAgentMessage(sessionIdValue, {
             content: text,
+            action: agentAction,
             activeFile: currentPath,
             code: currentCode,
             workspaceRevision: currentPath ? agentRevisions[currentPath] : undefined,
@@ -1190,7 +1193,7 @@ export function WorkbenchPage() {
                                               agentDisabledReason ? "本场考试未开启 AI"
                                                   : !agentCaps ? (agentLoading ? "正在加载 AI…" : "AI 暂不可用")
                                                       : !agentCaps.ready ? "AI 暂不可用：未配置模型密钥"
-                                                          : agentCaps.canEditCode ? "描述问题，AI 可以直接修改代码…"
+                                                          : agentCaps.canEditCode ? "描述当前问题；如需运行或修改，请选择本轮授权…"
                                                               : "描述你想了解的概念、思路或具体卡住的地方…"
                                           }
                                           spellCheck={false}
@@ -1203,6 +1206,16 @@ export function WorkbenchPage() {
                                           }}/>
                                 <div className="input-toolbar">
                                     <div className="input-tools">
+                                        {agentCaps?.canEditCode && (
+                                            <select value={agentAction}
+                                                    disabled={agentStreaming}
+                                                    aria-label="本轮 AI 授权"
+                                                    onChange={event => setAgentAction(event.target.value as "answer" | "run" | "edit")}>
+                                                <option value="answer">仅回答</option>
+                                                <option value="run">运行验证</option>
+                                                <option value="edit">允许修改</option>
+                                            </select>
+                                        )}
                                         <span className="input-hint">
                                             {agentStreaming
                                                 ? "正在生成，可点击右侧停止"

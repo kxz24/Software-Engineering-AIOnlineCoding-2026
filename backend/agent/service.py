@@ -15,7 +15,7 @@ from user.models import AuditLog
 
 from . import tools
 from .guard import GuardError, configured_reviewer
-from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level
+from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level, tools_for_turn
 from .models import AgentMessage, AgentSession, WorkspaceFile
 from .policy import (asks_for_check_targets_only, extract_scope_targets, localized_request,
                      scoped_violation, sanitize_scoped_text,
@@ -303,7 +303,7 @@ def _accumulate(totals, usage_event):
     totals["cache_miss"] += int(usage_event.get("cacheMissTokens") or 0)
 
 
-def generate_events(session, provider=None, reviewer=None):
+def generate_events(session, provider=None, reviewer=None, turn_action="edit"):
     """
     生成一次 AI 回复的事件流（同步生成器）。
 
@@ -318,8 +318,24 @@ def generate_events(session, provider=None, reviewer=None):
 
     max_rounds = max(1, int(getattr(settings, "AGENT_MAX_TOOL_ROUNDS", 6)))
     max_tokens = int(getattr(settings, "AGENT_MAX_OUTPUT_TOKENS", 1024))
-    specifications = tools.tool_specs_for(session.level)
+    allowed_tools = set(tools_for_turn(session.level, turn_action))
+    specifications = tools.tool_specs_for(session.level, allowed_tools)
     context = build_messages(session)
+    if turn_action == "answer":
+        context[0]["content"] += (
+            "\n【本轮授权】学生只请求回答问题。可以读取相关材料；"
+            "不要运行程序、修改文件或自行完成后续任务。回答所问后停止。"
+        )
+    elif turn_action == "run":
+        context[0]["content"] += (
+            "\n【本轮授权】学生请求运行验证。可以读取和运行；"
+            "不要修改文件，也不要扩展到未请求的测试或任务。"
+        )
+    else:
+        context[0]["content"] += (
+            "\n【本轮授权】学生允许修改代码。只处理本轮明确提出的范围，"
+            "完成必要验证后停止，不自行推进整题的其他部分。"
+        )
     totals = _empty_totals()
     collected_tool_calls = []
     finish_reason = "stop"
@@ -500,7 +516,7 @@ def generate_events(session, provider=None, reviewer=None):
                 }
                 ok, result = tools.execute_tool(
                     call["name"], call.get("arguments") or {}, tool_context,
-                    session, call_id=call["id"],
+                    session, call_id=call["id"], allowed_tools=allowed_tools,
                 )
                 _add_message(
                     session, AgentMessage.ROLE_TOOL, content=result,

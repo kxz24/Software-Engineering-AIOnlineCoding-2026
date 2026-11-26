@@ -265,6 +265,8 @@ class AgentMessageCreateView(APIView):
                 "properties": {
                     "clientMessageId": {"type": "string", "description": "幂等键"},
                     "content": {"type": "string", "description": "考生消息"},
+                    "action": {"type": "string", "enum": ["answer", "run", "edit"],
+                               "description": "本轮授权；默认只回答"},
                     "activeFile": {"type": "string", "description": "当前文件路径"},
                     "code": {"type": "string", "description": "当前编辑器内容"},
                     "workspaceRevision": {"type": "integer", "description": "前端持有的版本号"},
@@ -293,6 +295,12 @@ class AgentMessageCreateView(APIView):
         if len(text) > 8000:
             return Response({"message": "消息过长（上限 8000 字）"},
                             status=status.HTTP_400_BAD_REQUEST)
+        turn_action = content.get("action", "answer")
+        if turn_action not in ("answer", "run", "edit"):
+            return Response({"message": "无效的本轮授权"}, status=status.HTTP_400_BAD_REQUEST)
+        if session.level != AgentSession.LEVEL_EDIT and turn_action != "answer":
+            return Response({"message": "当前考试模式不允许运行或修改"},
+                            status=status.HTTP_403_FORBIDDEN)
         try:
             service.ensure_quota(session.exam, request.user)
         except service.QuotaExceeded as exc:
@@ -340,7 +348,7 @@ class AgentMessageCreateView(APIView):
                 "userSeq": user_message.seq,
             })
             try:
-                for event in service.generate_events(session):
+                for event in service.generate_events(session, turn_action=turn_action):
                     event_type = event.pop("type")
                     if event_type == "done":
                         last = (

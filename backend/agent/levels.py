@@ -50,6 +50,17 @@ def tools_for_level(level):
     return TOOLS_BY_LEVEL.get(level, ())
 
 
+def tools_for_turn(level, action="answer"):
+    """The exam level is an upper bound; each student turn grants less by default."""
+    if level != AgentSession.LEVEL_EDIT:
+        return tools_for_level(level)
+    if action == "edit":
+        return TOOLS_BY_LEVEL[level]
+    if action == "run":
+        return READ_TOOLS + RUN_TOOLS
+    return READ_TOOLS
+
+
 def can_edit_code(level):
     """该级别是否允许 AI 写入工作区。"""
     return level == AgentSession.LEVEL_EDIT

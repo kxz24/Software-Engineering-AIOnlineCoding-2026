@@ -253,6 +253,7 @@ export async function streamAgentMessage(
     sessionId: number,
     payload: {
         content: string;
+        action?: "answer" | "run" | "edit";
         activeFile?: string;
         code?: string;
         workspaceRevision?: number;
