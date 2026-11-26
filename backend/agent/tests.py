@@ -23,7 +23,8 @@ from .levels import TOOLS_BY_LEVEL
 from .policy import CODE_BLOCK_PLACEHOLDER, conservative_violation, sanitize_advise_text
 from .guard import GuardError
 from .providers import DeepSeekProvider, _extract_usage, thinking_off_body
-from .models import AgentHarnessJob, AgentMessage, AgentSession, CodeChange, WorkspaceFile
+from .models import (AgentHarnessJob, AgentMessage, AgentSession, AgentToolCall,
+                     CodeChange, WorkspaceFile)
 
 
 class RoundProvider:
@@ -1205,6 +1206,46 @@ class ProjectHarnessRoutingTests(AgentBaseTestCase):
         self.auth(self.other_token)
         self.assertEqual(self.client.get(
             f"/api/v1/agent/sessions/{session.id}/jobs/{job.id}").status_code, 404)
+
+    @override_settings(DEEPSEEK_API_KEY="test", PROJECT_JUDGE_RUNTIMES={"build-tools": "test-image"})
+    def test_rejected_harness_command_never_reaches_container(self):
+        from unittest.mock import MagicMock
+        from .harness import execute_project_job
+
+        session = self.create_session(self.create_exam(Exam.AI_OPEN))
+        message = service.add_user_message(session, "Run only make yas", action="run")
+        job = AgentHarnessJob.objects.create(
+            session=session, user_message=message, action="run", scope="project")
+        environment = MagicMock()
+        environment.container_id = "test-container"
+        environment.execute.side_effect = AssertionError("container command ran")
+        original_execute = environment.execute
+        agent = MagicMock()
+        agent.messages = []
+        def run_task(_):
+            result = environment.execute({"command": "cat unrelated.txt"})
+            self.assertEqual(result["returncode"], 126)
+            self.assertIn("not requested", result["output"])
+            return {"exit_status": "StepLimitExceeded", "submission": ""}
+        agent.run.side_effect = run_task
+        usage = {"inputTokens": 1, "outputTokens": 1,
+                 "cacheHitTokens": 0, "cacheMissTokens": 1}
+        with patch("minisweagent.environments.docker.DockerEnvironment",
+                   return_value=environment), \
+                patch("minisweagent.models.litellm_model.LitellmModel"), \
+                patch("minisweagent.agents.default.DefaultAgent", return_value=agent), \
+                patch("agent.harness.subprocess.run"), \
+                patch("agent.harness.configured_scope_provider"), \
+                patch("agent.harness.review_command_scope",
+                      return_value=(False, "not requested", usage)):
+            execute_project_job(job)
+        original_execute.assert_not_called()
+        self.assertTrue(AgentToolCall.objects.filter(
+            session=session, name="harness_command_review", ok=False).exists())
+        self.assertFalse(AgentToolCall.objects.filter(
+            session=session, name="harness_command").exists())
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentHarnessJob.STATUS_PARTIAL)
 
 
 class ProjectHarnessArchiveTests(SimpleTestCase):
