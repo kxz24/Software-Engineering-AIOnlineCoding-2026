@@ -439,6 +439,8 @@ class LevelTests(AgentBaseTestCase):
 
     def test_tools_by_level(self):
         self.assertNotIn("write_file", TOOLS_BY_LEVEL[AgentSession.LEVEL_ADVISE])
+        self.assertNotIn("run_sample_tests", TOOLS_BY_LEVEL[AgentSession.LEVEL_ADVISE])
+        self.assertIn("run_sample_tests", TOOLS_BY_LEVEL[AgentSession.LEVEL_EDIT])
         self.assertIn("write_file", TOOLS_BY_LEVEL[AgentSession.LEVEL_EDIT])
         self.assertEqual(TOOLS_BY_LEVEL[AgentSession.LEVEL_NONE], ())
 
@@ -462,6 +464,7 @@ class LevelTests(AgentBaseTestCase):
         self.assertEqual(body["level"], AgentSession.LEVEL_ADVISE)
         self.assertFalse(body["canEditCode"])
         self.assertNotIn("write_file", body["tools"])
+        self.assertNotIn("run_sample_tests", body["tools"])
         self.assertIn("read_workspace", body["tools"])
 
         exam = self.create_exam(Exam.AI_OPEN)
@@ -1015,6 +1018,13 @@ class ToolPermissionTests(AgentBaseTestCase):
         self.assertFalse(ok)
         self.assertIn("不可用工具", result)
         self.assertEqual(CodeChange.objects.count(), 0)
+
+    def test_advise_cannot_execute_sample_tests(self):
+        session = self.create_session()
+        context = tools.ToolContext(session, lambda *_: None)
+        ok, result = tools.execute_tool("run_sample_tests", {}, context, session)
+        self.assertFalse(ok)
+        self.assertIn("不可用工具", result)
 
 
 class WorkspaceAndSummaryTests(AgentBaseTestCase):
