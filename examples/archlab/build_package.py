@@ -101,6 +101,9 @@ def build(handout, reference, output):
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = (member.mode & 0o777) << 16
                 archive.writestr(info, data)
+                # The simulator is course handout material: students need its
+                # build scripts and public tests to work on the assignment.
+                archive.writestr(f"public/sim/{relative}", data.decode("utf-8"))
                 if relative in PUBLIC_FROM_HANDOUT:
                     archive.writestr(f"public/{PUBLIC_FROM_HANDOUT[relative]}", data)
                     found.add(relative)
