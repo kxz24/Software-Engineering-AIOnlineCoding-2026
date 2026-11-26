@@ -10,12 +10,95 @@ import {
     ExamDetail,
     ExamSubmissionEntry,
     ExamSummary,
+    SubmissionDetail,
+    downloadProjectArchive,
+    fetchSubmission,
+    saveProjectReview,
     fetchExam,
     fetchExamSubmissions,
     fetchExams,
 } from "../../api/client";
-import { submissionLabel } from "../../api/judge";
+import { submissionLabel, verdictMeta } from "../../api/judge";
 import { AgentUsageCard } from "../../components/AgentUsageCard";
+
+function ProjectReviewPanel({ submissionId, onSaved }: { submissionId: number; onSaved: (score: number) => void }) {
+    const [detail, setDetail] = useState<SubmissionDetail | null>(null);
+    const [error, setError] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [points, setPoints] = useState({ warmupPoints: "", reportPoints: "", bonusPoints: "" });
+
+    const load = async () => {
+        try {
+            setError("");
+            const result = await fetchSubmission(submissionId);
+            setDetail(result);
+            setPoints({
+                warmupPoints: String(result.project?.warmupPoints ?? ""),
+                reportPoints: String(result.project?.reportPoints ?? ""),
+                bonusPoints: String(result.project?.bonusPoints ?? 0),
+            });
+        } catch (e) {
+            setError((e as ApiError).message);
+        }
+    };
+
+    const save = async (event: React.FormEvent) => {
+        event.preventDefault();
+        setBusy(true);
+        setError("");
+        try {
+            const result = await saveProjectReview(submissionId, {
+                warmupPoints: Number(points.warmupPoints),
+                reportPoints: Number(points.reportPoints),
+                bonusPoints: Number(points.bonusPoints),
+            });
+            onSaved(result.score);
+            toast("人工评分已保存", "success");
+            await load();
+        } catch (e) {
+            setError((e as ApiError).message);
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <details onToggle={event => { if (event.target === event.currentTarget && (event.currentTarget as HTMLDetailsElement).open) void load(); }}>
+            <summary>查看工程提交</summary>
+            <button className="btn btn-secondary" type="button" onClick={() => {
+                void downloadProjectArchive(submissionId).catch(e => setError(e.message));
+            }}>下载工程包</button>
+            {error && <p role="alert">{error}</p>}
+            {!detail && !error && <p role="status">正在读取提交…</p>}
+            {detail?.judgeError && <p>{detail.judgeError}</p>}
+            {detail?.compileOutput && <details><summary>构建记录</summary><pre style={{ whiteSpace: "pre-wrap" }}>{detail.compileOutput}</pre></details>}
+            {detail && detail.cases.length > 0 && (
+                <details>
+                    <summary>验收结果（自动分 {detail.project?.automaticPoints} / 70）</summary>
+                    <ul>{detail.cases.map(item => (
+                        <li key={item.name}>{item.name} · {verdictMeta(item.verdict).label}{item.errorExcerpt ? " · " + item.errorExcerpt : ""}</li>
+                    ))}</ul>
+                </details>
+            )}
+            {detail?.project?.automaticPoints != null && (
+                <form onSubmit={save}>
+                    {([
+                        ["warmupPoints", "预习", 10],
+                        ["reportPoints", "报告", 20],
+                        ["bonusPoints", "加分", 10],
+                    ] as const).map(([key, name, max]) => (
+                        <label className="field" key={key}>
+                            <span className="label">{name}（满分 {max}）</span>
+                            <input className="input" type="number" min={0} max={max} step={1} required
+                                   value={points[key]} onChange={event => setPoints({ ...points, [key]: event.target.value })}/>
+                        </label>
+                    ))}
+                    <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "保存中…" : "保存人工分"}</button>
+                </form>
+            )}
+        </details>
+    );
+}
 
 /** 每 15 秒自动拉取一次提交动态 */
 const RefreshIntervalMs = 15000;
@@ -456,6 +539,10 @@ function ProctorDashboard({ examId }: { examId: number }) {
                                                     {submissionLabel(item).label}
                                                     {item.status === "judged" ? ` · ${item.score ?? 0} 分` : ""}
                                                 </div>
+                                                {item.hasProject && <ProjectReviewPanel submissionId={item.id} onSaved={score => {
+                                                    setSubmissions(current => current.map(entry => entry.id === item.id
+                                                        ? { ...entry, score, needsReview: false } : entry));
+                                                }}/> }
                                             </div>
                                         </div>
                                     ))}

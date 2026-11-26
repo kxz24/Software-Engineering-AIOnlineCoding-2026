@@ -247,7 +247,12 @@ export function ResultPage() {
                             </div>
                             {latest ? (
                                 <div className="card-body">
-                                    <pre style={CodeBoxStyle}>{latest.code || "（空提交）"}</pre>
+                                    {detail?.project ? (
+                                        <p>工程包已存档。自动分 {detail.project.automaticPoints ?? "待评测"} / 70，
+                                            预习 {detail.project.warmupPoints ?? "待复核"} / 10，
+                                            报告 {detail.project.reportPoints ?? "待复核"} / 20，
+                                            加分 {detail.project.bonusPoints ?? "待复核"} / 10。</p>
+                                    ) : <pre style={CodeBoxStyle}>{latest.code || "（空提交）"}</pre>}
                                 </div>
                             ) : (
                                 <div className="card-body muted">

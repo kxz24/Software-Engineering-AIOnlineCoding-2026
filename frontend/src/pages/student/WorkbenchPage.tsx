@@ -310,6 +310,8 @@ export function WorkbenchPage() {
 
     const [problemTab, setProblemTab] = useState<ProblemTabKey>("statement");
     const [submitting, setSubmitting] = useState(false);
+    const [archiveError, setArchiveError] = useState("");
+    const [archiveSelection, setArchiveSelection] = useState<{ problemId: number; file: File } | null>(null);
 
     // AI 助教：级别 / 会话 / 消息 / 修改记录（接口见 api/agent.ts）
     const [agentCaps, setAgentCaps] = useState<AgentCapabilities | null>(null);
@@ -346,6 +348,8 @@ export function WorkbenchPage() {
         [submissions, problem]
     );
     const used = mySubmissions.length;
+    const projectProblem = problem?.judgeProfile === "ftp";
+    const projectArchive = archiveSelection?.problemId === problem?.problemId ? archiveSelection?.file : undefined;
     const remaining = detail ? Math.max(0, detail.submitLimit - used) : 0;
     const finished = !!detail && (detail.status === "finished" || seconds <= 0);
     const currentCode = (currentPath && contents[currentPath]) || "";
@@ -638,6 +642,11 @@ export function WorkbenchPage() {
             toast(`本题提交次数已用完（上限 ${detail.submitLimit} 次）`, "warning");
             return;
         }
+        const submission = projectProblem ? projectArchive : currentCode;
+        if (submission === undefined) {
+            toast("请选择 ZIP 工程包", "warning");
+            return;
+        }
         const confirmed = window.confirm(
             `确认提交「任务 ${problem.order + 1}：${problem.title}」？\n` +
             `提交后在后台自动判题，本题剩余 ${remaining - 1} 次机会。`
@@ -646,9 +655,10 @@ export function WorkbenchPage() {
             return;
         }
         setSubmitting(true);
-        submitCode(detail.id, problem.problemId, currentCode, problem.language)
+        submitCode(detail.id, problem.problemId, submission, problem.language)
             .then(result => {
                 setSubmitting(false);
+                setArchiveSelection(null);
                 setSubmissions(current => [
                     {
                         id: result.submission.id,
@@ -658,7 +668,7 @@ export function WorkbenchPage() {
                         language: problem.language,
                         status: result.submission.status,
                         created: result.submission.created,
-                        code: currentCode,
+                        code: projectProblem ? "" : currentCode,
                     },
                     ...current,
                 ]);
@@ -759,16 +769,16 @@ export function WorkbenchPage() {
                             <Icon name="clock" size={14}/>
                             {finished ? "考试已结束" : `剩余 ${formatCountdown(seconds)}`}
                         </div>
-                        <div className="save-status">
+                        {!projectProblem && <div className="save-status">
                             <span className="dot" style={edited ? { background: "#f59e0b" } : undefined}/>
                             {edited ? "有未保存修改" : (savedClock ? `已自动保存 ${savedClock}` : "自动保存已开启")}
-                        </div>
+                        </div>}
                         <button className="btn-submit" type="button"
                                 onClick={handleSubmit}
-                                disabled={submitting || finished || remaining <= 0}
+                                disabled={submitting || finished || remaining <= 0 || (projectProblem && !projectArchive)}
                                 title={finished ? "考试已结束" : remaining <= 0 ? "本题提交次数已用完" : undefined}>
                             <Icon name="arrow-up" size={14} strokeWidth={1.9}/>
-                            提交答卷
+                            {submitting ? "提交中…" : projectProblem ? "提交工程包" : "提交答卷"}
                             <span className="sub">剩余 {remaining} 次</span>
                         </button>
                         <div className="avatar">{(user?.nickname || "生").slice(0, 1)}</div>
@@ -784,14 +794,14 @@ export function WorkbenchPage() {
                                     任务 {problem.order + 1} / {problems.length} · {problem.title}
                                 </span>
                                 <span className="meta-chip blue">{TypeLabels[problem.type] || problem.type}</span>
-                                <span className="meta-chip">{problem.language}</span>
+                                <span className="meta-chip">{projectProblem ? "工程包提交" : problem.language}</span>
                             </>
                         )}
                         <span className="meta-chip">{detail.submitLimit} 次提交 / 题</span>
                         <span className="meta-chip green"><span className="status-dot"/>提交后自动判题</span>
                     </div>
                     <div className="metabar-right">
-                        <span>本地草稿自动保存</span>
+                        <span>{projectProblem ? "本地开发后上传" : "本地草稿自动保存"}</span>
                         <span className="divider-dot">·</span>
                         <span className="link" onClick={() => history.push(Routes.examPrecheck(examId))}>
                             查看考试须知
@@ -808,7 +818,7 @@ export function WorkbenchPage() {
                                     className="link"
                                     style={{ fontSize: 11 }}
                                     title="立即把当前代码写入本地草稿"
-                                    onClick={handleSaveDraft}>
+                                    disabled={projectProblem} onClick={handleSaveDraft}>
                                 保存草稿
                             </button>
                         </div>
@@ -820,9 +830,15 @@ export function WorkbenchPage() {
                                 return (
                                     <div key={item.problemId}
                                          className={"tree-row lv1" + (isActive ? " active" : "")}
-                                         onClick={() => setCurrentProblemId(item.problemId)}>
+                                         onClick={() => {
+                                             if (item.problemId !== problem?.problemId) {
+                                                 setArchiveSelection(null);
+                                                 setArchiveError("");
+                                             }
+                                             setCurrentProblemId(item.problemId);
+                                         }}>
                                         <Icon name="file" size={13} strokeWidth={1.7} className="file-ico"/>
-                                        <span>{path}</span>
+                                        <span>{item.judgeProfile === "ftp" ? item.title : path}</span>
                                         {modified[path] && <span className="modified-dot"/>}
                                     </div>
                                 );
@@ -961,6 +977,29 @@ export function WorkbenchPage() {
                         </div>
 
                         <div className="editor">
+                            {projectProblem && problem ? (
+                                <div className="problem-body">
+                                    <label className="field">
+                                        <span className="label">ZIP 工程包（最多 16 MB）</span>
+                                        <input key={problem.problemId} type="file" accept=".zip,application/zip"
+                                               disabled={finished || submitting || remaining <= 0}
+                                               onChange={event => {
+                                                   setArchiveError("");
+                                                   const file = event.target.files?.[0];
+                                                   if (file && file.size > 16 * 1024 * 1024) {
+                                                       event.target.value = "";
+                                                       setArchiveSelection(null);
+                                                       setArchiveError("工程包不能超过 16 MB");
+                                                       return;
+                                                   }
+                                                   setArchiveSelection(file ? { problemId: problem.problemId, file } : null);
+                                               }}/>
+                                    </label>
+                                    <p className="rule-line">按题面封装服务端、客户端、预习和报告后提交。</p>
+                                    {archiveError && <p className="rule-line" role="alert">{archiveError}</p>}
+                                    {projectArchive && <p className="rule-line" role="status">已选择 {projectArchive.name}</p>}
+                                </div>
+                            ) : <>
                             <div className="editor-tabs">
                                 <div className={"editor-tab active"}>
                                     <Icon name="file" size={12} stroke="#2563eb"/>
@@ -997,6 +1036,7 @@ export function WorkbenchPage() {
                                 <SampleRunPanel examId={detail.id} problem={problem}
                                                 code={currentCode} finished={finished}/>
                             )}
+                            </>}
                         </div>
 
                     </section>

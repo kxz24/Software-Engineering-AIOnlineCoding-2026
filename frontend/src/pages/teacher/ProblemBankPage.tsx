@@ -22,7 +22,7 @@ const TypeLabels: Record<string, string> = {
 /** 表单里的题型选项：直接标出当前是否支持自动判题 */
 const TypeOptionLabels: Record<string, string> = {
     algorithm: "算法题（自动判题）",
-    engineering: "工程题（暂不支持自动判题）",
+    engineering: "工程题",
 };
 
 const LanguageLabels: Record<string, string> = {
@@ -55,6 +55,7 @@ interface ProblemForm {
     language: string;
     difficulty: string;
     image: string;
+    judgeProfile: string;
     description: string;
     starterCode: string;
     timeLimitMs: number;
@@ -70,6 +71,7 @@ const EmptyForm: ProblemForm = {
     language: "python",
     difficulty: "medium",
     image: "",
+    judgeProfile: "",
     description: "",
     starterCode: "",
     timeLimitMs: 2000,
@@ -156,6 +158,7 @@ export function ProblemBankPage() {
                     language: detail.language,
                     difficulty: detail.difficulty,
                     image: detail.image,
+                    judgeProfile: detail.judgeProfile || "",
                     description: detail.description,
                     starterCode: detail.starterCode,
                     timeLimitMs: detail.timeLimitMs,
@@ -203,6 +206,7 @@ export function ProblemBankPage() {
             language: form.language,
             difficulty: form.difficulty,
             image: form.image.trim(),
+            judgeProfile: form.type === "engineering" ? form.judgeProfile : "",
             starterCode: form.starterCode,
             timeLimitMs: Number(form.timeLimitMs),
             memoryLimitMb: Number(form.memoryLimitMb),
@@ -361,6 +365,16 @@ export function ProblemBankPage() {
                                     ))}
                                 </select>
                             </div>
+                            {form.type === "engineering" && (
+                                <label className="field">
+                                    <span className="label">工程评测方案</span>
+                                    <select className="select" value={form.judgeProfile}
+                                            onChange={event => setForm({ ...form, judgeProfile: event.target.value })}>
+                                        <option value="">人工评阅</option>
+                                        <option value="ftp">FTP 实现（上传 ZIP、自动验收）</option>
+                                    </select>
+                                </label>
+                            )}
                             <div className="field">
                                 <div className="label">难度</div>
                                 <select className="select"

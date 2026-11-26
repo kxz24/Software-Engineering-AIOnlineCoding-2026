@@ -8,7 +8,7 @@ from django.core.cache import caches
 from django.db import transaction
 from django.utils import timezone
 
-from exam.models import ExamProblem, Submission, SubmissionCase
+from exam.models import ExamProblem, ProjectSubmission, Submission, SubmissionCase
 from judge.constants import (
     STATUS_FAILED,
     STATUS_JUDGED,
@@ -16,6 +16,7 @@ from judge.constants import (
     STATUS_PENDING,
     VERDICT_SYSTEM_ERROR,
 )
+from judge.ftp import judge_ftp
 from judge.languages import normalize_language
 from judge.sandbox import CaseSpec, run_sandbox
 from judge.scoring import summarize
@@ -78,6 +79,12 @@ def _build_case_specs(samples):
 
 def _judge(submission):
     """执行一次判题；异常由调用方转成 failed 状态。"""
+    project = ProjectSubmission.objects.filter(submission=submission).first()
+    if project is not None and project.profile == Problem.JUDGE_FTP:
+        judge_ftp(submission, project)
+        record_audit(submission.student, "submission.judged", f"{submission.id} 工程题评测完成")
+        return
+
     problem = submission.problem
     if problem.type == Problem.TYPE_ENGINEERING:
         raise RuntimeError("工程题暂不支持自动判题，请教师人工复核")
@@ -176,7 +183,7 @@ def _judge(submission):
     )
 
 
-@shared_task(bind=True, acks_late=True)
+@shared_task(bind=True, acks_late=True, soft_time_limit=155, time_limit=165)
 def judge_submission(self, submission_id):
     """
     判题任务入口。

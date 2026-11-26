@@ -217,16 +217,17 @@ async function request<T>(
             fullUrl += (url.indexOf("?") >= 0 ? "&" : "?") + queryString;
         }
     }
+    const form = options.body instanceof FormData ? options.body : undefined;
     let response: Response;
     try {
         response = await fetch(fullUrl, {
             method: options.method || "GET",
             mode: "cors",
             headers: {
-                "Content-Type": "application/json",
+                ...(form ? {} : { "Content-Type": "application/json" }),
                 "Authorization": getToken() || "",
             },
-            body: options.body === undefined ? undefined : JSON.stringify(options.body),
+            body: form || (options.body === undefined ? undefined : JSON.stringify(options.body)),
             signal: options.signal,
         });
     } catch (e) {
@@ -321,6 +322,7 @@ export interface ProblemSummary {
     language: string;
     difficulty: "easy" | "medium" | "hard";
     image: string;
+    judgeProfile?: string;
     timeLimitMs: number;
     memoryLimitMb: number;
     outputLimitKb: number;
@@ -371,6 +373,7 @@ export function createProblem(payload: {
     language: string;
     difficulty: string;
     image: string;
+    judgeProfile?: string;
     starterCode: string;
     timeLimitMs?: number;
     memoryLimitMb?: number;
@@ -390,6 +393,7 @@ export function updateProblem(
         language?: string;
         difficulty?: string;
         image?: string;
+        judgeProfile?: string;
         starterCode?: string;
         timeLimitMs?: number;
         memoryLimitMb?: number;
@@ -524,6 +528,7 @@ export interface SubmissionResultFields {
 }
 
 export interface ExamSubmissionEntry extends SubmissionResultFields {
+    hasProject?: boolean;
     id: number;
     examId: number;
     problemId: number;
@@ -575,6 +580,7 @@ export interface StudentProblem {
     difficulty: string;
     description: string;
     starterCode: string;
+    judgeProfile?: string;
     samples: StudentSample[];
 }
 
@@ -596,6 +602,7 @@ export interface StudentExamDetail {
 
 /** 学生侧提交记录（含代码正文） */
 export interface MySubmission extends SubmissionResultFields {
+    hasProject?: boolean;
     id: number;
     examId: number;
     problemId: number;
@@ -663,6 +670,14 @@ export interface SubmissionDetail extends MySubmission {
     judgeError: string;
     judgedAt: string | null;
     cases: SubmissionCase[];
+    project?: ProjectReview | null;
+}
+
+export interface ProjectReview {
+    automaticPoints: number | null;
+    warmupPoints: number | null;
+    reportPoints: number | null;
+    bonusPoints: number | null;
 }
 
 /** 我的考试列表 */
@@ -692,12 +707,18 @@ export function fetchMyProblemSubmissions(
 export function submitCode(
     examId: number,
     problemId: number,
-    code: string,
+    code: string | File,
     language?: string
 ): Promise<{ submission: { id: number; problemId: number; status: string; created: string }; used: number; remaining: number }> {
+    let body: unknown = { code, language };
+    if (typeof code !== "string") {
+        const form = new FormData();
+        form.append("archive", code);
+        body = form;
+    }
     return request(Urls.mySubmission(examId, problemId), {
         method: "POST",
-        body: { code, language },
+        body,
     });
 }
 
@@ -719,4 +740,25 @@ export function setToken(token: string) {
 /** 清除令牌 */
 export function removeToken() {
     localStorage.removeItem("token");
+}
+
+
+export function saveProjectReview(submissionId: number, points: Omit<ProjectReview, "automaticPoints">): Promise<{ score: number }> {
+    return request(Urls.submissionDetail(submissionId) + "/project-review", { method: "PATCH", body: points });
+}
+
+export async function downloadProjectArchive(submissionId: number): Promise<void> {
+    const response = await fetch(Urls.submissionDetail(submissionId) + "/archive", {
+        headers: { Authorization: getToken() || "" },
+    });
+    if (!response.ok) {
+        const json = await readJson(response);
+        throw new ApiError(json.message || "下载工程包失败", response.status);
+    }
+    const href = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = "submission-" + submissionId + ".zip";
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(href), 1000);
 }

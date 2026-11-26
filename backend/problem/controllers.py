@@ -40,6 +40,7 @@ def problem_summary(problem):
         "language": problem.language,
         "difficulty": problem.difficulty,
         "image": problem.image,
+        "judgeProfile": problem.judge_profile,
         "timeLimitMs": problem.time_limit_ms,
         "memoryLimitMb": problem.memory_limit_mb,
         "outputLimitKb": problem.output_limit_kb,

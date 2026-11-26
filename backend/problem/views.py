@@ -29,6 +29,11 @@ def _validate_fields(content, partial=False):
         fields["description"] = str(content.get("description") or "")
     if has("starterCode"):
         fields["starter_code"] = str(content.get("starterCode") or "")
+    if has("judgeProfile"):
+        profile = content.get("judgeProfile") or ""
+        if profile not in ("", Problem.JUDGE_FTP):
+            return None, "未知工程评测方案"
+        fields["judge_profile"] = profile
     if has("image"):
         image = str(content.get("image") or "").strip()
         if len(image) > 128:
@@ -161,6 +166,7 @@ class ProblemListView(APIView):
                     "language": {"type": "string", "description": "python / cpp / c / java"},
                     "difficulty": {"type": "string", "description": "easy / medium / hard"},
                     "starterCode": {"type": "string", "description": "初始代码"},
+                    "judgeProfile": {"type": "string", "description": "工程评测方案：ftp 或空"},
                     "image": {"type": "string", "description": "依赖镜像"},
                     "timeLimitMs": {"type": "integer", "description": "单用例时限（毫秒）"},
                     "memoryLimitMb": {"type": "integer", "description": "内存上限（MB）"},
@@ -188,6 +194,8 @@ class ProblemListView(APIView):
         fields, error = _validate_fields(content, partial=False)
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+        if fields.get("judge_profile") and fields["type"] != Problem.TYPE_ENGINEERING:
+            return Response({"message": "只有工程题可启用工程评测"}, status=status.HTTP_400_BAD_REQUEST)
         samples, error = _validate_samples(content)
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
@@ -244,6 +252,7 @@ class ProblemDetailView(APIView):
                     "language": {"type": "string"},
                     "difficulty": {"type": "string"},
                     "starterCode": {"type": "string"},
+                    "judgeProfile": {"type": "string"},
                     "image": {"type": "string"},
                     "timeLimitMs": {"type": "integer"},
                     "memoryLimitMb": {"type": "integer"},
@@ -272,6 +281,8 @@ class ProblemDetailView(APIView):
         fields, error = _validate_fields(content, partial=True)
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+        if fields.get("judge_profile", problem.judge_profile) and fields.get("type", problem.type) != Problem.TYPE_ENGINEERING:
+            return Response({"message": "只有工程题可启用工程评测"}, status=status.HTTP_400_BAD_REQUEST)
         samples, error = _validate_samples(content)
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)

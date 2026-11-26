@@ -152,6 +152,16 @@ class Submission(models.Model):
         return f"{self.student.username}@{self.exam.title}#{self.problem_id}"
 
 
+class ProjectSubmission(models.Model):
+    submission = models.OneToOneField(Submission, on_delete=models.CASCADE, related_name="project")
+    archive = models.BinaryField()
+    profile = models.CharField(max_length=16)
+    automatic_points = models.PositiveSmallIntegerField(null=True)
+    warmup_points = models.PositiveSmallIntegerField(null=True)
+    report_points = models.PositiveSmallIntegerField(null=True)
+    bonus_points = models.PositiveSmallIntegerField(null=True)
+
+
 class SubmissionCase(models.Model):
     """
     单个测试用例的判定结果。

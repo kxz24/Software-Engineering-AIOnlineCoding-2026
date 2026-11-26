@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 from redis.exceptions import RedisError
 
 from judge.languages import LANGUAGES
+from judge.project import MAX_ARCHIVE_BYTES, read_project
 from judge.tasks import (
     SAMPLE_RUN_LOCK_TTL,
     SAMPLE_RUN_QUEUE_TIMEOUT,
@@ -447,10 +448,15 @@ class MySubmissionView(APIView):
                     "language": {"type": "string", "description": "语言，缺省用题目语言"},
                 },
                 "required": ["code"],
-            }
+            },
+            "multipart/form-data": {
+                "type": "object",
+                "properties": {"archive": {"type": "string", "format": "binary"}},
+                "required": ["archive"],
+            },
         },
-        description="提交代码。当前只收卷存档（status=pending），判题服务接入后回填结果",
-        summary="提交代码",
+        description="提交代码或 FTP 工程包，由后台异步判题。",
+        summary="正式提交",
     )
     @login_required
     def post(self, request, *args, **kwargs):
@@ -458,15 +464,26 @@ class MySubmissionView(APIView):
         if not ok:
             return Response({"message": "考试不存在"}, status=status.HTTP_404_NOT_FOUND)
         content = request.data or {}
+        upload = request.FILES.get("archive")
+        archive = None
         code = str(content.get("code") or "")
-        if not code.strip():
+        if upload is not None:
+            if upload.size > MAX_ARCHIVE_BYTES:
+                return Response({"message": "工程包不能超过 16 MB"}, status=status.HTTP_400_BAD_REQUEST)
+            archive = upload.read()
+            try:
+                read_project(archive)
+            except ValueError as exc:
+                return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            code = ""
+        elif not code.strip():
             return Response({"message": "代码不能为空"}, status=status.HTTP_400_BAD_REQUEST)
         if len(code) > 200_000:
             return Response({"message": "代码过长（上限 200 KB）"}, status=status.HTTP_400_BAD_REQUEST)
 
         submission, code_status, ok = controllers.create_submission(
             request.user, exam, kwargs.get("problem_id"), code,
-            str(content.get("language") or ""),
+            str(content.get("language") or ""), archive=archive,
         )
         if not ok:
             return Response({"message": submission}, status=code_status)

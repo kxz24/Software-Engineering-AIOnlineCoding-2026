@@ -19,6 +19,8 @@ class Problem(models.Model):
         (TYPE_ALGORITHM, "算法题"),
     ]
 
+    JUDGE_FTP = "ftp"
+
     LANGUAGE_PYTHON = "python"
     LANGUAGE_CPP = "cpp"
     LANGUAGE_C = "c"
@@ -61,6 +63,7 @@ class Problem(models.Model):
     )
     # 工程题为初始代码 / 仓库说明，算法题为函数骨架
     starter_code = models.TextField(blank=True, default="", verbose_name="初始代码")
+    judge_profile = models.CharField(max_length=16, blank=True, default="", verbose_name="工程评测方案")
     # 依赖镜像名（预留字段；当前判题统一使用 settings.JUDGE_IMAGE）
     image = models.CharField(max_length=128, blank=True, default="", verbose_name="依赖镜像")
     # 判题资源限制（每个测试用例）

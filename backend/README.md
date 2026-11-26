@@ -185,6 +185,22 @@ manage.py check
 JUDGE_INTEGRATION=1 python manage.py test judge.tests.JudgeTaskTests
 ```
 
+
+### FTP 工程题
+
+在题库选择「工程题 → FTP 实现」，填写题面，组卷时将题目满分设为 100 分以沿用原作业分值。学生可本地开发，在工作台上传原作业目录结构的 ZIP，允许外套一层学号目录。文件上限 16 MB，`server/` 中的 Makefile 生成 `server`，`client/` 提供可执行的 `client` 或由同目录 Makefile 生成。原包含预习、报告及可选演示，用于教师复核。
+
+评测使用两个低权限容器，共享仅含回环接口的网络，按参考对端分别验收服务端（40 分）和客户端（30 分）。正式用例含约 1 GB 传输。构建有编译器警告时扣 1 分。自动评分结束后，教师在监考页的提交动态打开「查看工程提交」，下载原包，录入预习（10 分）、报告（20 分）和加分（最多 10 分）。非 100 分的题目按配置分值等比折算。
+
+更新后需要执行数据库迁移，并重建判题基础镜像。Compose 部署沿用本节之后的构建与迁移流程，本地启动可执行以下命令。
+
+```powershell
+docker build -t aicoding-judge:latest -f backend/judge/Dockerfile backend/judge
+cd backend
+python manage.py makemigrations user problem exam agent
+python manage.py migrate
+```
+
 ## Docker 部署
 
 在装有 Docker 和 Compose 的 Linux 服务器上，从仓库根目录执行：
