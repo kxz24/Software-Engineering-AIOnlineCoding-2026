@@ -444,6 +444,17 @@ class LevelTests(AgentBaseTestCase):
         self.assertIn("write_file", TOOLS_BY_LEVEL[AgentSession.LEVEL_EDIT])
         self.assertEqual(TOOLS_BY_LEVEL[AgentSession.LEVEL_NONE], ())
 
+    def test_open_turn_requires_explicit_action_for_execution_or_edit(self):
+        from .levels import tools_for_turn
+
+        self.assertNotIn("run_sample_tests", tools_for_turn(AgentSession.LEVEL_EDIT, "answer"))
+        self.assertNotIn("write_file", tools_for_turn(AgentSession.LEVEL_EDIT, "answer"))
+        self.assertIn("run_sample_tests", tools_for_turn(AgentSession.LEVEL_EDIT, "run"))
+        self.assertNotIn("write_file", tools_for_turn(AgentSession.LEVEL_EDIT, "run"))
+        self.assertIn("write_file", tools_for_turn(AgentSession.LEVEL_EDIT, "edit"))
+        self.assertNotIn("run_sample_tests", tools_for_turn(AgentSession.LEVEL_ADVISE, "edit"))
+        self.assertNotIn("write_file", tools_for_turn(AgentSession.LEVEL_ADVISE, "edit"))
+
     def test_capabilities_closed_forbidden(self):
         exam = self.create_exam(Exam.AI_CLOSED)
         self.auth()
@@ -1025,6 +1036,34 @@ class ToolPermissionTests(AgentBaseTestCase):
         ok, result = tools.execute_tool("run_sample_tests", {}, context, session)
         self.assertFalse(ok)
         self.assertIn("不可用工具", result)
+
+    def test_open_answer_turn_rejects_unrequested_write(self):
+        exam = self.create_exam(Exam.AI_OPEN)
+        session = self.create_session(exam)
+        context = tools.ToolContext(session, lambda *_: None)
+        ok, result = tools.execute_tool(
+            "write_file", {"path": "x.py", "content": "print(1)"},
+            context, session, allowed_tools={"list_files", "read_workspace"},
+        )
+        self.assertFalse(ok)
+        self.assertIn("不可用工具", result)
+        self.assertFalse(WorkspaceFile.objects.exists())
+
+    def test_open_answer_turn_rejects_model_write(self):
+        exam = self.create_exam(Exam.AI_OPEN)
+        session = self.create_session(exam)
+        service.add_user_message(session, "这段程序在做什么？")
+        provider = RoundProvider([[
+            {"type": "tool_call", "id": "unexpected", "name": "write_file",
+             "arguments": {"path": "x.py", "content": "print(1)"}},
+            {"type": "done", "finishReason": "tool_calls"},
+        ], text_round("它会输出一个数字。")])
+        events = list(service.generate_events(
+            session, provider=provider, turn_action="answer"))
+        denied = [event for event in events if event["type"] == "tool_result"]
+        self.assertEqual(len(denied), 1)
+        self.assertFalse(denied[0]["ok"])
+        self.assertFalse(WorkspaceFile.objects.exists())
 
 
 class WorkspaceAndSummaryTests(AgentBaseTestCase):
