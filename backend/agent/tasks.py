@@ -27,6 +27,9 @@ def run_agent_harness_job(self, job_id):
         if job.status == AgentHarnessJob.STATUS_CANCELLED:
             return
         job.status = AgentHarnessJob.STATUS_FAILED
-        job.error = "工程任务执行失败，请查看服务端日志后重试。"
+        from .harness_scope import ScopeReviewError
+        job.error = ("改动范围审查未通过，文件未应用。"
+                     if isinstance(exc, ScopeReviewError)
+                     else "工程任务执行失败，请查看服务端日志后重试。")
         job.save(update_fields=["status", "error", "updated"])
         raise

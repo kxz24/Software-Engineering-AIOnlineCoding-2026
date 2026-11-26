@@ -73,7 +73,7 @@ CMD ["gunicorn", "-w4", "-b", "0.0.0.0:8000", "--timeout", "300", "--log-level=d
 
 # Coding harness worker: separate image so Django and judge do not carry LiteLLM.
 FROM python:3.11-slim AS agent_worker
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 DJANGO_SETTINGS_MODULE=app.settings_prod
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 DJANGO_SETTINGS_MODULE=app.settings_prod LITELLM_LOCAL_MODEL_COST_MAP=True
 WORKDIR /code
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc default-libmysqlclient-dev pkg-config docker-cli \

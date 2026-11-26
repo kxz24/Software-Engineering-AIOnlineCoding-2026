@@ -321,6 +321,13 @@ export async function streamAgentMessage(
                 onEvent({ type: "done", finishReason: "stop" });
                 return;
             }
+            if (job.status === "partial") {
+                if (job.result) onEvent({ type: "delta", text: job.result });
+                onEvent({ type: "usage", inputTokens: job.inputTokens,
+                    outputTokens: job.outputTokens, cacheHitTokens: 0, cacheMissTokens: 0 });
+                onEvent({ type: "done", finishReason: "length" });
+                return;
+            }
             if (job.status === "failed") {
                 onEvent({ type: "error", code: "harness", message: job.error });
                 onEvent({ type: "done", finishReason: "error" });

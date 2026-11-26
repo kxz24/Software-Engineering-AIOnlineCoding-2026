@@ -115,6 +115,7 @@ class AgentHarnessJob(models.Model):
     STATUS_QUEUED = "queued"
     STATUS_RUNNING = "running"
     STATUS_DONE = "done"
+    STATUS_PARTIAL = "partial"
     STATUS_FAILED = "failed"
     STATUS_CANCELLED = "cancelled"
 

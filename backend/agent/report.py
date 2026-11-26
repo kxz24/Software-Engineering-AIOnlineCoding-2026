@@ -1,6 +1,8 @@
 """Experimental, evidence-linked description of the help a student requested."""
 
 import json
+import logging
+import re
 
 from django.conf import settings
 
@@ -12,9 +14,20 @@ class ReportError(Exception):
     pass
 
 
+logger = logging.getLogger(__name__)
+
+
 ACTIVITIES = {"knowledge", "algorithm", "coding", "debugging", "other"}
 STUDENT_FIELDS = ("summary", "focus", "repeatedQuestions",
                   "independentWork", "limitations")
+
+
+def _student_report_text(value):
+    """Remove message sequence numbers that models sometimes mistake for turn counts."""
+    return re.sub(
+        r"第\s*\d+(?:\s*[、，,]\s*\d+)*\s*次(?:提问|请求|对话)",
+        "相关提问", value,
+    )
 
 REPORT_RULES = """你是考试对话的过程分析员。输入是 dialogue 与 observedWork；只根据输入返回 JSON，不要 Markdown。
 结构：{"turns":[{"userSeq":整数,"activity":"knowledge|algorithm|coding|debugging|other",
@@ -40,10 +53,20 @@ evidence 必须逐字摘自对应 userSeq 的学生提问，不能从助教回�
 studentReport 只写学生问了什么、得到什么回答，以及有证据的学习活动；
 可以说明观察到的 AI 操作，但不能把考生授权当成已经完成的工作。
 按知识、算法、编程、调试等领域统计提问次数，聚焦具体主题，指出有无反复追问。
-面向学生时用“第几次提问”描述顺序，不暴露内部消息序号 userSeq 或 seq。
+studentReport 只按领域、主题与请求结果概括，不使用“第几次提问”等轮次编号，
+也不暴露内部消息序号 userSeq 或 seq。
 不要写模型、提示词、审查、规则、系统是否合规，也不要比较 helpLevel 与 receivedLevel；
 这些信息只属于内部审查。没有代码或后续验证时，不得推断哪些部分由学生独立完成。
 不能据此断言学生已经学会、存在作弊或给出最终成绩。"""
+
+REPORT_RULES += """
+observedWork.harnessJobs 是逐轮工程任务的服务端记录。status=failed 表示该轮没有应用文件修改；
+commandSamples 只能证明命令被执行以及截取到的输出，不能仅凭命令文字或返回码推断测试通过。
+若某轮没有助教回复，但有工程命令记录，应在 studentReport 中如实区分“尝试运行”和“已完成修改”。
+activity=coding 用于直接请求编写、实现或修改源码文件，即使涉及算法或处理器设计；
+activity=algorithm 仅用于询问方案、原理、复杂度或设计选择而没有要求直接写入源码。
+任务失败不改变学生当初请求的活动类别。
+"""
 
 
 def _work_summary(observed_work):
@@ -51,6 +74,8 @@ def _work_summary(observed_work):
     runs = int(observed_work.get("successfulRuns") or 0)
     harness_runs = int(observed_work.get("harnessRunRequests") or 0)
     harness_steps = int(observed_work.get("harnessSteps") or 0)
+    failed_jobs = sum(job.get("status") in ("failed", "partial")
+                      for job in observed_work.get("harnessJobs") or [])
     submissions = observed_work.get("submissions") or []
     parts = []
     if changes:
@@ -60,9 +85,12 @@ def _work_summary(observed_work):
                      + (f"；其中 {reverted} 次已撤销" if reverted else ""))
     else:
         parts.append("没有记录到 AI 文件修改")
-    parts.append(f"运行验证 {runs} 次" if runs else "没有记录到成功的程序运行验证")
+    parts.append(f"独立运行验证 {runs} 次" if runs else "没有记录到独立的运行验证请求")
     if harness_steps:
         parts.append(f"工程助手共执行 {harness_steps} 步操作")
+        parts.append("编辑任务中的构建与测试结果以逐轮命令输出为准")
+    if failed_jobs:
+        parts.append(f"工程任务失败或未完成 {failed_jobs} 次，这些轮次没有应用文件修改")
     if harness_runs:
         parts.append(f"工程运行请求 {harness_runs} 次；完成请求不代表构建成功")
     if submissions:
@@ -94,7 +122,7 @@ def build_help_report(messages, provider, observed_work=None):
     ]
     parts = []
     try:
-        for event in provider.stream(payload, [], max_tokens=4096):
+        for event in provider.stream(payload, [], max_tokens=8192):
             if event["type"] == "delta":
                 parts.append(event["text"])
     except ProviderError as exc:
@@ -130,6 +158,7 @@ def build_help_report(messages, provider, observed_work=None):
                 for key in STUDENT_FIELDS):
             raise ValueError("invalid student report")
     except (ValueError, TypeError, KeyError) as exc:
+        logger.warning("报告校验失败: %s; raw_len=%d", exc, len(raw))
         raise ReportError("汇报模型返回了无效或无依据的结果") from exc
     counts = {activity: 0 for activity in sorted(ACTIVITIES)}
     replies = {}
@@ -147,7 +176,8 @@ def build_help_report(messages, provider, observed_work=None):
                                         min(turn["helpLevel"], 2))
         counts[turn["activity"]] += 1
     return {
-        "studentReport": {**{key: student_report[key] for key in STUDENT_FIELDS},
+        "studentReport": {**{key: _student_report_text(student_report[key])
+                             for key in STUDENT_FIELDS},
                           "activityCounts": counts,
                           "workSummary": _work_summary(observed_work)},
         "systemReview": {
@@ -159,6 +189,18 @@ def build_help_report(messages, provider, observed_work=None):
                                   if turn["receivedLevel"] < turn["helpLevel"]],
         },
     }
+
+
+def build_help_report_with_retry(messages, provider, observed_work=None):
+    """Retry one invalid draft while keeping the evidence checks strict."""
+    for attempt in range(2):
+        try:
+            return build_help_report(messages, provider,
+                                     observed_work=observed_work)
+        except ReportError:
+            if attempt:
+                raise
+            logger.warning("报告首稿无效，重试一次")
 
 
 def report_for_session(session):
@@ -179,6 +221,23 @@ def report_for_session(session):
         exam=session.exam, student=session.student, problem=session.problem,
         created__gte=session.created,
     ).order_by("-created").values("verdict")[:20])
+    harness_jobs = []
+    for job in session.harness_jobs.order_by("created")[:30]:
+        commands = list(session.tool_calls.filter(
+            call_id__startswith=f"harness-{job.id}-",
+        ).order_by("-created").values("arguments", "ok", "result_excerpt")[:5])
+        harness_jobs.append({
+            "userSeq": job.user_message.seq, "action": job.action,
+            "scope": job.scope, "targetPath": job.target_path,
+            "status": job.status, "steps": job.steps,
+            "result": job.result[:600],
+            "commandSamples": [
+                {"command": str(item["arguments"].get("command") or "")[:250],
+                 "ok": item["ok"],
+                 "output": item["result_excerpt"][:240]}
+                for item in reversed(commands)
+            ],
+        })
     observed_work = {
         "aiChanges": [{"path": item["file_path"], "status": item["status"]}
                       for item in changes],
@@ -187,6 +246,8 @@ def report_for_session(session):
         "harnessRunRequests": session.harness_jobs.filter(
             action="run", status="done").count(),
         "harnessSteps": sum(session.harness_jobs.values_list("steps", flat=True)),
+        "harnessJobs": harness_jobs,
         "submissions": submissions,
     }
-    return build_help_report(messages, provider, observed_work=observed_work)
+    return build_help_report_with_retry(messages, provider,
+                                        observed_work=observed_work)

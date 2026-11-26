@@ -380,6 +380,34 @@ class AdviseGuardTests(SimpleTestCase):
                 {"seq": 2, "role": "assistant", "content": "先学树状数组。"},
             ], provider)
 
+    def test_help_report_retries_invalid_evidence_once(self):
+        import json
+        from .report import build_help_report_with_retry
+
+        draft = {
+            "turns": [{"userSeq": 1, "activity": "coding",
+                       "helpLevel": 3, "receivedLevel": 3,
+                       "evidence": "not in question"}],
+            "studentReport": {
+                "summary": "Asked for one edit.", "focus": "a file",
+                "repeatedQuestions": "none", "independentWork": "unknown",
+                "limitations": "one turn",
+            },
+        }
+        corrected = {**draft, "turns": [{**draft["turns"][0],
+                                         "evidence": "Edit one line"}]}
+        provider = RoundProvider([
+            text_round(json.dumps(draft)),
+            text_round(json.dumps(corrected)),
+        ])
+        result = build_help_report_with_retry([
+            {"seq": 1, "role": "user", "content": "Edit one line"},
+            {"seq": 2, "role": "assistant", "content": "Done"},
+        ], provider)
+        self.assertEqual(provider.calls, 2)
+        self.assertEqual(result["systemReview"]["turns"][0]["evidence"],
+                         "Edit one line")
+
 
 class AgentBaseTestCase(TestCase):
     def setUp(self):
@@ -1157,6 +1185,43 @@ class ProjectHarnessRoutingTests(AgentBaseTestCase):
 
 
 class ProjectHarnessArchiveTests(SimpleTestCase):
+    def test_scope_review_checks_requested_diff(self):
+        from .harness_scope import review_edit_scope
+
+        provider = RoundProvider([text_round(
+            '{"allowed":true,"feedback":""}'
+        )])
+        allowed, feedback, usage = review_edit_scope(
+            "Change only the first comment", {"main.py": "# new\nprint(1)\n"},
+            {"main.py": ("# old\nprint(1)\n", 1)}, provider)
+        self.assertTrue(allowed)
+        self.assertEqual(feedback, "")
+        self.assertIn("studentRequest", provider.requests[0][1]["content"])
+        self.assertIn("-# old", provider.requests[0][1]["content"])
+        self.assertIn("+# new", provider.requests[0][1]["content"])
+        self.assertGreaterEqual(usage["inputTokens"], 0)
+
+    def test_scope_review_fails_closed_on_invalid_or_excessive_diff(self):
+        from .harness_scope import ScopeReviewError, review_edit_scope
+
+        provider = RoundProvider([text_round("not json")])
+        with self.assertRaises(ScopeReviewError):
+            review_edit_scope("one line", {"main.py": "new"},
+                              {"main.py": ("old", 1)}, provider)
+        self.assertEqual(provider.calls, 2)
+        with self.assertRaises(ScopeReviewError):
+            review_edit_scope("whole file",
+                              {"main.py": "\n".join(str(i) for i in range(8000))},
+                              {"main.py": ("old", 1)}, provider)
+
+    def test_student_report_does_not_expose_internal_message_numbers(self):
+        from .report import _student_report_text
+
+        self.assertEqual(
+            _student_report_text("第1、3、18次提问都要求修改代码。"),
+            "相关提问都要求修改代码。",
+        )
+
     def test_failed_build_request_is_not_counted_as_success(self):
         from .report import _work_summary
 
@@ -1196,6 +1261,21 @@ class ProjectHarnessArchiveTests(SimpleTestCase):
             archive.addfile(info)
         with self.assertRaises(RuntimeError):
             _changed_public_files(data.getvalue(), snapshot)
+
+    def test_file_scope_tolerates_cleaned_generated_input(self):
+        from .harness import _changed_public_files, _stage_archive
+
+        snapshot = {"src/main.py": ("old", 1),
+                    "build/generated.c": ("generated", 1)}
+        exported = _stage_archive({"src/main.py": ("new", 1)})
+        self.assertEqual(
+            _changed_public_files(exported, snapshot,
+                                  required_names={"src/main.py"}),
+            {"src/main.py": "new"},
+        )
+        with self.assertRaises(RuntimeError):
+            _changed_public_files(exported, snapshot,
+                                  required_names={"build/generated.c"})
 
 
 class WorkspaceAndSummaryTests(AgentBaseTestCase):

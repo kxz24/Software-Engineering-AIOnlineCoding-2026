@@ -6,9 +6,11 @@ credentials are copied into it.
 """
 
 import io
+import os
 import subprocess
 import tarfile
 import tempfile
+from uuid import uuid4
 
 from django.conf import settings
 from django.db import transaction
@@ -17,7 +19,14 @@ from django.db.models import F
 from problem.project_package import safe_name
 
 from . import service, tools
+from .harness_scope import (ScopeReviewError, configured_scope_provider,
+                            review_edit_scope)
 from .models import AgentHarnessJob, AgentMessage, AgentToolCall, WorkspaceFile
+
+
+# The gateway model is not in LiteLLM's public price map. Avoid a remote GitHub
+# fetch during worker startup; usage is recorded from the API response instead.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 
 SYSTEM_TEMPLATE = """You are a coding assistant in an exam workspace.
@@ -71,7 +80,7 @@ def _stage_archive(snapshot):
     return buffer.getvalue()
 
 
-def _changed_public_files(archive_bytes, snapshot):
+def _changed_public_files(archive_bytes, snapshot, required_names=None):
     if len(archive_bytes) > 70 * 1024 * 1024:
         raise RuntimeError("工程工作区输出过大")
     found = {}
@@ -83,7 +92,8 @@ def _changed_public_files(archive_bytes, snapshot):
             if not member.isfile() or member.size > 1024 * 1024:
                 raise RuntimeError(f"公开文件已变为无效类型：{name}")
             found[name] = archive.extractfile(member).read().decode("utf-8")
-    if set(found) != set(snapshot):
+    required = set(snapshot) if required_names is None else set(required_names)
+    if not required <= set(found):
         raise RuntimeError("工程工作区缺少公开文件")
     return {name: content for name, content in found.items()
             if content != snapshot[name][0]}
@@ -105,7 +115,7 @@ def _final_text(outcome, changes, steps):
     summary = str(outcome.get("submission") or "").strip()
     if not summary:
         summary = ("已按本轮请求完成操作。" if outcome.get("exit_status") == "Submitted"
-                   else "达到本轮操作上限，未确认任务完成。")
+                   else "本轮未能自行提交完成结果；沙箱中的改动未应用到工作区。")
     if changes:
         summary += "\n\n已更新文件：" + "、".join(sorted(changes))
     return summary[:3000]
@@ -173,7 +183,7 @@ def execute_project_job(job):
                     AgentHarnessJob.objects.filter(pk=job.pk).update(steps=F("steps") + 1)
                     raise
                 AgentToolCall.objects.create(
-                    session=session, call_id=f"harness-{job.pk}-{agent.n_calls}"[:64],
+                    session=session, call_id=f"harness-{job.pk}-{uuid4().hex}"[:64],
                     name="harness_command", arguments={"command": command[:2000]},
                     ok=output.get("returncode") == 0,
                     result_excerpt=str(output.get("output") or "")[:2000],
@@ -187,12 +197,26 @@ def execute_project_job(job):
             task = (f"{job.user_message.content}\n\nAuthorized action: {job.action}. "
                     + (scope_note if job.action == "edit" else
                        "Run only the checks the student requested; do not edit files."))
-            outcome = agent.run(task)
-            exported = subprocess.run(
-                ["docker", "exec", environment.container_id,
-                 "tar", "-cf", "-", "-C", "/workspace", "."],
-                check=True, capture_output=True, timeout=30).stdout
-            changes = _changed_public_files(exported, snapshot)
+            try:
+                outcome = agent.run(task)
+            finally:
+                input_tokens, output_tokens, cached = _model_usage(agent.messages)
+                AgentHarnessJob.objects.filter(pk=job.pk).update(
+                    input_tokens=input_tokens, output_tokens=output_tokens)
+                service._add_usage(session, {"input": input_tokens,
+                                             "output": output_tokens,
+                                             "cache_hit": cached,
+                                             "cache_miss": max(0, input_tokens - cached)})
+            if job.action == "run":
+                changes = {}
+            else:
+                exported = subprocess.run(
+                    ["docker", "exec", environment.container_id,
+                     "tar", "-cf", "-", "-C", "/workspace", "."],
+                    check=True, capture_output=True, timeout=30).stdout
+                required = {target} if job.scope == "file" else None
+                changes = _changed_public_files(exported, snapshot,
+                                                required_names=required)
         finally:
             environment.cleanup()
 
@@ -202,6 +226,30 @@ def execute_project_job(job):
             raise RuntimeError("Agent 修改了本轮授权范围外的文件；改动未应用")
         if outcome.get("exit_status") != "Submitted":
             changes = {}
+        if changes:
+            allowed, feedback, review_usage = review_edit_scope(
+                job.user_message.content, changes, snapshot,
+                configured_scope_provider(),
+            )
+            service._add_usage(session, {
+                "input": review_usage["inputTokens"],
+                "output": review_usage["outputTokens"],
+                "cache_hit": review_usage["cacheHitTokens"],
+                "cache_miss": review_usage["cacheMissTokens"],
+            })
+            input_tokens += review_usage["inputTokens"]
+            output_tokens += review_usage["outputTokens"]
+            AgentHarnessJob.objects.filter(pk=job.pk).update(
+                input_tokens=input_tokens, output_tokens=output_tokens)
+            AgentToolCall.objects.create(
+                session=session,
+                call_id=f"harness-{job.pk}-{uuid4().hex}"[:64],
+                name="harness_scope_review",
+                arguments={"changedPaths": sorted(changes)},
+                ok=allowed, result_excerpt=feedback[:500],
+            )
+            if not allowed:
+                raise ScopeReviewError("改动范围审查未通过，文件未应用")
 
         with transaction.atomic():
             current_job = AgentHarnessJob.objects.select_for_update().get(pk=job.pk)
@@ -227,7 +275,6 @@ def execute_project_job(job):
                     )
                     if not ok:
                         raise RuntimeError(f"写回失败：{message[:200]}")
-            input_tokens, output_tokens, cached = _model_usage(agent.messages)
             text = _final_text(outcome, changes, job.steps)
             service._add_message(
                 session, AgentMessage.ROLE_ASSISTANT, content=text,
@@ -236,14 +283,12 @@ def execute_project_job(job):
                                  "completion_tokens": output_tokens}},
                 finish_reason=outcome.get("exit_status", "")[:24],
             )
-            service._add_usage(session, {"input": input_tokens,
-                                         "output": output_tokens,
-                                         "cache_hit": cached,
-                                         "cache_miss": max(0, input_tokens - cached)})
             job.steps = AgentHarnessJob.objects.get(pk=job.pk).steps
             job.input_tokens = input_tokens
             job.output_tokens = output_tokens
             job.result = text
-            job.status = AgentHarnessJob.STATUS_DONE
+            job.status = (AgentHarnessJob.STATUS_DONE
+                          if outcome.get("exit_status") == "Submitted"
+                          else AgentHarnessJob.STATUS_PARTIAL)
             job.save(update_fields=["steps", "input_tokens", "output_tokens",
                                     "result", "status", "updated"])
