@@ -15,7 +15,7 @@ from .models import AgentToolCall, CodeChange, WorkspaceFile
 
 logger = logging.getLogger(__name__)
 
-MAX_READ_CHARS = 20000
+MAX_READ_CHARS = 6000
 MAX_TOOL_RESULT_CHARS = 8000
 
 
@@ -41,19 +41,23 @@ TOOL_SPECS = {
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "列出当前工作区里的文件路径与版本号。",
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            "description": "分页列出当前工作区里的文件路径与版本号。",
+            "parameters": {"type": "object", "properties": {
+                "offset": {"type": "integer", "description": "从第几个文件开始，默认 0"},
+                "limit": {"type": "integer", "description": "返回数量，最多 40，默认 40"},
+            }, "additionalProperties": False},
         },
     },
     "read_workspace": {
         "type": "function",
         "function": {
             "name": "read_workspace",
-            "description": "读取工作区中某个文件的内容；不传 path 时返回全部文件。",
+            "description": "按路径分段读取工作区文件；多文件工作区必须指定 path。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "文件路径，如 p1_a_plus_b.py"},
+                    "offset": {"type": "integer", "description": "读取起点，默认 0"},
                 },
                 "additionalProperties": False,
             },
@@ -178,30 +182,54 @@ def _tool_error(message):
     return _json({"ok": False, "error": message})
 
 
-def _execute_list_files(ctx, _arguments):
+def _execute_list_files(ctx, arguments):
+    try:
+        offset = int(arguments.get("offset", 0))
+        limit = int(arguments.get("limit", 40))
+    except (TypeError, ValueError):
+        return _tool_error("offset 和 limit 必须是整数")
+    if offset < 0 or not 1 <= limit <= 40:
+        return _tool_error("offset 必须非负，limit 必须在 1–40 之间")
     files = workspace_files(ctx.session)
+    total = files.count()
+    page = list(files[offset:offset + limit])
     return _json({
         "ok": True,
-        "files": [{"path": f.path, "revision": f.revision} for f in files],
+        "files": [{"path": f.path, "revision": f.revision} for f in page],
+        "total": total,
+        "nextOffset": offset + len(page) if offset + len(page) < total else None,
     })
 
 
 def _execute_read_workspace(ctx, arguments):
     files = workspace_files(ctx.session)
     path = arguments.get("path")
+    if not path and hasattr(ctx.session.problem, "project_bundle"):
+        return _tool_error("工程题请先列出文件，再指定文件路径读取")
     if path:
         files = [f for f in files if f.path == path]
         if not files:
             return _tool_error(f"工作区没有文件 {path}")
+    elif files.count() > 1:
+        return _tool_error("多文件工作区请指定文件路径读取")
+    try:
+        offset = int(arguments.get("offset", 0))
+    except (TypeError, ValueError):
+        return _tool_error("offset 必须是非负整数")
+    if offset < 0:
+        return _tool_error("offset 必须是非负整数")
     payload = []
     for file in files:
         content = file.content or ""
-        truncated = len(content) > MAX_READ_CHARS
+        end = min(len(content), offset + MAX_READ_CHARS)
         payload.append({
             "path": file.path,
             "revision": file.revision,
-            "content": content[:MAX_READ_CHARS],
-            "truncated": truncated,
+            "content": content[offset:end],
+            "offset": offset,
+            "totalLength": len(content),
+            "nextOffset": end if end < len(content) else None,
+            "truncated": end < len(content),
         })
     return _json({"ok": True, "files": payload})
 
@@ -420,7 +448,7 @@ def execute_tool(name, arguments, context, session, call_id="", allowed_tools=No
     else:
         try:
             result = _EXECUTORS[name](context, arguments or {})
-            ok = True
+            ok = bool(json.loads(result).get("ok", True))
         except Exception as exc:  # noqa: BLE001 —— 工具异常转成模型可读的错误
             logger.exception("工具执行失败 %s session=%s", name, session.id)
             result = _tool_error(f"工具执行失败: {exc}")

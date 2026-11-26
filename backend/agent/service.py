@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 MAX_SYSTEM_FILE_CHARS = 12000
 MAX_SYSTEM_SAMPLE_CHARS = 4000
+MAX_SYSTEM_FILE_LIST_CHARS = 12000
 
 
 class AgentError(Exception):
@@ -162,11 +163,21 @@ def _system_prompt(session):
 
     files = list(tools.workspace_files(session))
     file_text = ""
-    for file in files:
-        content = file.content or ""
-        if len(content) > MAX_SYSTEM_FILE_CHARS:
-            content = content[:MAX_SYSTEM_FILE_CHARS] + "\n…（内容已截断）"
-        file_text += f"\n### {file.path}（版本 {file.revision}）\n```\n{content}\n```\n"
+    if hasattr(problem, "project_bundle"):
+        lines = [f"- {file.path}（版本 {file.revision}，{len(file.content or '')} 字符）"
+                 for file in files]
+        for line in lines:
+            if len(file_text) + len(line) + 1 > MAX_SYSTEM_FILE_LIST_CHARS:
+                file_text += "\n…（其余文件请用 list_files 查看）"
+                break
+            file_text += "\n" + line
+        file_text += "\n需要内容时用 read_workspace 按路径读取。"
+    else:
+        for file in files:
+            content = file.content or ""
+            if len(content) > MAX_SYSTEM_FILE_CHARS:
+                content = content[:MAX_SYSTEM_FILE_CHARS] + "\n…（内容已截断）"
+            file_text += f"\n### {file.path}（版本 {file.revision}）\n```\n{content}\n```\n"
     if not file_text:
         file_text = "（工作区还没有文件）"
 
