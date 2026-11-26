@@ -20,7 +20,7 @@ from problem.project_package import safe_name
 
 from . import service, tools
 from .harness_scope import (ScopeReviewError, configured_scope_provider,
-                            review_edit_scope)
+                            review_command_scope, review_edit_scope)
 from .models import AgentHarnessJob, AgentMessage, AgentToolCall, WorkspaceFile
 
 
@@ -171,17 +171,54 @@ def execute_project_job(job):
                 wall_time_limit_seconds=int(getattr(settings, "AGENT_HARNESS_WALL_SECONDS", 600)),
             )
             original_execute = environment.execute
+            scope_provider = configured_scope_provider()
+            review_totals = {"input": 0, "output": 0, "cache_hit": 0,
+                             "cache_miss": 0}
+            consecutive_denials = 0
+            recent_commands = []
 
             def tracked_execute(action, *args, **kwargs):
+                nonlocal consecutive_denials
                 if AgentHarnessJob.objects.filter(pk=job.pk).values_list(
                         "status", flat=True).first() == AgentHarnessJob.STATUS_CANCELLED:
                     raise RuntimeError("任务已由考生停止")
                 command = str(action.get("command") or "")
+                allowed, feedback, usage = review_command_scope(
+                    job.user_message.content, job.action, job.scope, target,
+                    command, scope_provider, recent_commands)
+                totals = {"input": usage["inputTokens"],
+                          "output": usage["outputTokens"],
+                          "cache_hit": usage["cacheHitTokens"],
+                          "cache_miss": usage["cacheMissTokens"]}
+                service._add_usage(session, totals)
+                for key in review_totals:
+                    review_totals[key] += totals[key]
+                AgentToolCall.objects.create(
+                    session=session, call_id=f"harness-{job.pk}-{uuid4().hex}"[:64],
+                    name="harness_command_review",
+                    arguments={"command": command[:2000]},
+                    ok=allowed, result_excerpt=feedback[:500],
+                )
+                if not allowed:
+                    consecutive_denials += 1
+                    AgentHarnessJob.objects.filter(pk=job.pk).update(steps=F("steps") + 1)
+                    if consecutive_denials >= 3:
+                        raise ScopeReviewError("连续三条命令超出本轮授权范围")
+                    return {"returncode": 126, "exception_info": None,
+                            "output": "Command was not executed. Scope review: " + feedback}
+                consecutive_denials = 0
                 try:
                     output = original_execute(action, *args, **kwargs)
                 except Exception:
                     AgentHarnessJob.objects.filter(pk=job.pk).update(steps=F("steps") + 1)
                     raise
+                if ("COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in command
+                        and not str(output.get("output") or "").startswith(
+                            "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT")):
+                    output["output"] = (str(output.get("output") or "")
+                        + "\nThe completion marker was not the first output line. "
+                          "To finish, use only an echo command that prints the marker "
+                          "first, followed by the final summary; do not inspect again.")
                 AgentToolCall.objects.create(
                     session=session, call_id=f"harness-{job.pk}-{uuid4().hex}"[:64],
                     name="harness_command", arguments={"command": command[:2000]},
@@ -189,6 +226,8 @@ def execute_project_job(job):
                     result_excerpt=str(output.get("output") or "")[:2000],
                 )
                 AgentHarnessJob.objects.filter(pk=job.pk).update(steps=F("steps") + 1)
+                recent_commands.append(command[:500])
+                del recent_commands[:-8]
                 return output
 
             environment.execute = tracked_execute
@@ -200,13 +239,15 @@ def execute_project_job(job):
             try:
                 outcome = agent.run(task)
             finally:
-                input_tokens, output_tokens, cached = _model_usage(agent.messages)
+                model_input, model_output, cached = _model_usage(agent.messages)
+                input_tokens = model_input + review_totals["input"]
+                output_tokens = model_output + review_totals["output"]
                 AgentHarnessJob.objects.filter(pk=job.pk).update(
                     input_tokens=input_tokens, output_tokens=output_tokens)
-                service._add_usage(session, {"input": input_tokens,
-                                             "output": output_tokens,
+                service._add_usage(session, {"input": model_input,
+                                             "output": model_output,
                                              "cache_hit": cached,
-                                             "cache_miss": max(0, input_tokens - cached)})
+                                             "cache_miss": max(0, model_input - cached)})
             if job.action == "run":
                 changes = {}
             else:

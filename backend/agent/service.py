@@ -219,7 +219,10 @@ def _system_prompt(session):
         "使用中文，先解答再停止；用学生能理解的说法，允许简短的数字例子解释概念。"
         "回复只覆盖当前提问所需的深度，不能因追求短而省掉关键解释。"
         if not can_edit_code(session.level) else
-        "使用中文，简洁直接；可以提供具体代码与明确的修改建议。"
+        "使用中文，简洁直接；只在学生明确索要时提供相应范围的代码或修改建议。"
+        "严格遵守提问限定的证据来源：若只问当前文件，就只据当前文件回答，"
+        "只概括可直接观察的内容与是否已有实现；"
+        "不补充题面要求、其他文件、缺少哪些题面部件、后续做法或未经运行验证的结果。"
     )
 
     return f"""你是 AI Coding 考试平台里的编程助教，正在协助一名考生完成考试题目。
@@ -318,6 +321,10 @@ def _accumulate(totals, usage_event):
 
 def _open_scope_issue(question, answer):
     """Catch the clearest unsolicited code dump even if a reviewer misses it."""
+    if (re.search(r"只(?:根据|依据|看|从).{0,10}(?:当前|这个|该)?文件", question)
+            and re.search(r"题面|题目要求|编译|汇编(?:后|产物|结果)|构建|运行后|测试结果", answer)):
+        return ("学生限定只依据当前文件；只保留文件中可直接观察的内容和据此得出的结论，"
+                "删除题目要求、其他来源及未经运行的结果推断。")
     overview = re.search(r"大致|思路|概念|是什么|含义|作用|为什么|哪些阶段|原理|概览", question)
     implementation = re.search(r"代码|怎么写|怎么改|实现|命令|运行|修改|修复|完整解", question)
     if overview and not implementation and "```" in answer:

@@ -206,6 +206,16 @@ class AdviseGuardTests(SimpleTestCase):
         self.assertIn("所有独立的越界问题", REVIEW_RULES)
         self.assertNotIn("只指出第一处", REVIEW_RULES)
 
+    def test_file_only_answer_rejects_unverified_build_claim(self):
+        from .service import _open_scope_issue
+        question = "这份文件目前实现了什么？只根据当前文件说明。"
+        self.assertTrue(_open_scope_issue(
+            question, "只有一行注释，汇编产物将是空目标文件。"))
+        self.assertTrue(_open_scope_issue(
+            question, "文件只有注释，汇编后不会产生可执行行为。"))
+        self.assertFalse(_open_scope_issue(
+            question, "文件目前只有一行占位注释，尚未实现功能。"))
+
     def test_guard_disables_thinking_for_configured_provider(self):
         from .guard import configured_reviewer
         with override_settings(DEEPSEEK_API_KEY="test", AGENT_GUARD_MODEL="Qwen3.8-Flash"):
@@ -304,10 +314,7 @@ class AdviseGuardTests(SimpleTestCase):
         provider = RoundProvider([text_round(
             '{"turns":[{"userSeq":1,"activity":"algorithm","helpLevel":1,"receivedLevel":1,'
             '"evidence":"切分思路"}],"studentReport":{'
-            '"summary":"在算法层面提问 1 次，主要询问切分思路。",'
-            '"focus":"切分思路","repeatedQuestions":"未观察到反复追问",'
-            '"independentWork":"对话未覆盖独立完成情况",'
-            '"limitations":"仅根据对话，不能判断是否真正学会",'
+            '"narrative":"学生询问切分思路，助教解释了平衡左右两侧的方向。",'
             '"receivedLevel":4}}'
         )])
         result = build_help_report([
@@ -325,9 +332,7 @@ class AdviseGuardTests(SimpleTestCase):
         provider = RoundProvider([text_round(
             '{"turns":[{"userSeq":1,"activity":"debugging","helpLevel":2,'
             '"receivedLevel":2,"evidence":"为什么失败"}],"studentReport":{'
-            '"summary":"询问失败原因并获得排查方向。","focus":"失败原因",'
-            '"repeatedQuestions":"未观察到","independentWork":"无法判断",'
-            '"limitations":"只观察到一轮对话"}}'
+            '"narrative":"学生询问失败原因，助教建议检查输入边界。"}}'
         )])
         result = build_help_report([
             {"seq": 1, "role": "user", "content": "为什么失败？", "requested_action": "run"},
@@ -336,8 +341,11 @@ class AdviseGuardTests(SimpleTestCase):
             "aiChanges": [{"path": "p1/main.py", "status": "applied"}],
             "successfulRuns": 1, "submissions": [],
         })
-        self.assertIn("p1/main.py", result["studentReport"]["workSummary"])
-        self.assertIn("1 次", result["studentReport"]["workSummary"])
+        self.assertEqual(result["studentReport"]["narrative"],
+                         "学生询问失败原因，助教建议检查输入边界。")
+        self.assertNotIn("workSummary", result["studentReport"])
+        self.assertEqual(result["systemReview"]["observedWork"]["aiChanges"][0]["path"],
+                         "p1/main.py")
         self.assertEqual(result["systemReview"]["observedWork"]["successfulRuns"], 1)
         self.assertEqual(provider.requests[0][1]["content"].count('"requestedAction": "run"'), 1)
 
@@ -346,9 +354,7 @@ class AdviseGuardTests(SimpleTestCase):
         provider = RoundProvider([text_round(
             '{"turns":[{"userSeq":1,"activity":"algorithm","helpLevel":2,'
             '"receivedLevel":1,"evidence":"需要检查哪些节点"}],"studentReport":{'
-            '"summary":"询问检查对象，获得节点列表。","focus":"节点范围",'
-            '"repeatedQuestions":"未观察到","independentWork":"无法判断",'
-            '"limitations":"仅有一轮对话"}}'
+            '"narrative":"学生询问检查对象，助教列出了起点和终点。"}}'
         )])
         result = build_help_report([
             {"seq": 1, "role": "user", "content": "需要检查哪些节点？"},
@@ -357,7 +363,8 @@ class AdviseGuardTests(SimpleTestCase):
         ], provider)
         self.assertEqual(result["systemReview"]["turns"][0]["receivedLevel"], 2)
         self.assertEqual(result["systemReview"]["underHelpUserSeqs"], [])
-        self.assertEqual(result["studentReport"]["summary"], "询问检查对象，获得节点列表。")
+        self.assertEqual(result["studentReport"]["narrative"],
+                         "学生询问检查对象，助教列出了起点和终点。")
 
     def test_help_report_rejects_fabricated_user_turn(self):
         from .report import ReportError, build_help_report
@@ -388,11 +395,7 @@ class AdviseGuardTests(SimpleTestCase):
             "turns": [{"userSeq": 1, "activity": "coding",
                        "helpLevel": 3, "receivedLevel": 3,
                        "evidence": "not in question"}],
-            "studentReport": {
-                "summary": "Asked for one edit.", "focus": "a file",
-                "repeatedQuestions": "none", "independentWork": "unknown",
-                "limitations": "one turn",
-            },
+            "studentReport": {"narrative": "The student asked for one edit; it was done."},
         }
         corrected = {**draft, "turns": [{**draft["turns"][0],
                                          "evidence": "Edit one line"}]}
@@ -710,6 +713,26 @@ class SessionAndMessageTests(AgentBaseTestCase):
 
 
 class ToolPermissionTests(AgentBaseTestCase):
+    def test_open_answer_revises_unverified_file_only_claim(self):
+        exam = self.create_exam(Exam.AI_OPEN)
+        session = self.create_session(exam)
+        service.add_user_message(session, "这份文件目前实现了什么？只根据当前文件说明。")
+        candidate = "只有一行注释，汇编后不会产生可执行行为。"
+        corrected = "当前文件只有一行占位注释，尚未实现功能。"
+        provider = RoundProvider([text_round(candidate), text_round(corrected)])
+
+        class Reviewer:
+            def review(self, question, answer):
+                return {"allowed": True, "feedback": "", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+
+        events = list(service.generate_events(
+            session, provider=provider, reviewer=Reviewer(), turn_action="answer"))
+        streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
+        self.assertEqual(streamed, corrected)
+        self.assertEqual(provider.calls, 2)
+        self.assertIn("未经运行的结果推断", provider.requests[1][-1]["content"])
+
     def test_scope_question_revises_even_when_model_review_approves(self):
         session = self.create_session()
         service.add_user_message(session, "我该重点检查哪些相邻位置？先讲思路就好。")
@@ -1185,6 +1208,30 @@ class ProjectHarnessRoutingTests(AgentBaseTestCase):
 
 
 class ProjectHarnessArchiveTests(SimpleTestCase):
+    def test_command_review_uses_current_request_and_action(self):
+        from .harness_scope import review_command_scope
+
+        provider = RoundProvider([text_round(
+            '{"allowed":false,"feedback":"Only inspect the requested file."}'
+        )])
+        allowed, feedback, _ = review_command_scope(
+            "Inspect the first comment", "run", "file", "main.py",
+            "cat unrelated.py", provider)
+        self.assertFalse(allowed)
+        self.assertIn("requested file", feedback)
+        payload = provider.requests[0][1]["content"]
+        self.assertIn('"authorizedAction": "run"', payload)
+        self.assertIn('"proposedCommand": "cat unrelated.py"', payload)
+
+    def test_command_review_fails_closed(self):
+        from .harness_scope import ScopeReviewError, review_command_scope
+
+        provider = RoundProvider([text_round("maybe")])
+        with self.assertRaises(ScopeReviewError):
+            review_command_scope("Run tests", "run", "project", "",
+                                 "make test", provider)
+        self.assertEqual(provider.calls, 2)
+
     def test_scope_review_checks_requested_diff(self):
         from .harness_scope import review_edit_scope
 

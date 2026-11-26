@@ -156,6 +156,15 @@ export function CodeEditor({ path, initialValue, language, onChange }: Props) {
     const [state, setState] = useState<LoadState>(() => (typeof window !== "undefined" && window.monaco ? "ready" : "loading"));
     const [fallbackValue, setFallbackValue] = useState(initialValue);
 
+    // Monaco 静态资源不可用时，textarea 仍须跟随文件切换。只在路径变化时
+    // 同步，避免学生逐字输入时重置光标；AI 写回由父组件的 editorEpoch 重挂载。
+    useEffect(() => {
+        if (state === "failed") {
+            setFallbackValue(initialValue);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [path, state]);
+
     // 挂载：加载 Monaco 并创建编辑器（StrictMode 下的重复执行由 createdRef 防御）
     const createdRef = useRef(false);
     const disposedRef = useRef(false);

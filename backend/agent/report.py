@@ -18,8 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 ACTIVITIES = {"knowledge", "algorithm", "coding", "debugging", "other"}
-STUDENT_FIELDS = ("summary", "focus", "repeatedQuestions",
-                  "independentWork", "limitations")
+STUDENT_FIELDS = ("narrative",)
 
 
 def _student_report_text(value):
@@ -32,10 +31,7 @@ def _student_report_text(value):
 REPORT_RULES = """你是考试对话的过程分析员。输入是 dialogue 与 observedWork；只根据输入返回 JSON，不要 Markdown。
 结构：{"turns":[{"userSeq":整数,"activity":"knowledge|algorithm|coding|debugging|other",
 "helpLevel":0到4的整数,"receivedLevel":0到4的整数,"evidence":"原话中的短摘录"}],
-"studentReport":{"summary":"按提问领域概述次数、主要问题和实际获得的回答",
-"focus":"主要关注点","repeatedQuestions":"反复提问的主题，若无则说明未观察到",
-"independentWork":"有证据支持的自主完成部分，若无则说明无法判断",
-"limitations":"证据限制"}}。
+"studentReport":{"narrative":"面向学生的连贯过程叙述，约两到四段"}}。
 每条学生提问都要有一项；userSeq 必须来自输入中的学生消息。
 dialogue 中 requestedAction 是考生该轮显式选择的“只回答/运行/修改”授权，
 不等于助教实际运行或修改。实际动作只以 observedWork 的服务器记录为准。
@@ -50,10 +46,12 @@ helpLevel 是学生请求的深度，receivedLevel 是助教实际给予的深�
 只问错误原因或位置而未索要改法时，helpLevel 为 2，即使提到了具体报错或变量；
 只有明确请求怎么改、怎么修时，局部修错的 helpLevel 才是 3。
 evidence 必须逐字摘自对应 userSeq 的学生提问，不能从助教回答中摘取。
-studentReport 只写学生问了什么、得到什么回答，以及有证据的学习活动；
-可以说明观察到的 AI 操作，但不能把考生授权当成已经完成的工作。
-按知识、算法、编程、调试等领域统计提问次数，聚焦具体主题，指出有无反复追问。
-studentReport 只按领域、主题与请求结果概括，不使用“第几次提问”等轮次编号，
+studentReport.narrative 写成连贯的过程观察：学生主要问了什么、如何追问、
+助教实际回答了什么或做了什么，哪些尝试没有完成。按真实主题与因果关系组织，
+不要按固定栏目逐项罗列，也不要重复机械统计；必要时可自然提及提问次数。
+区分“请求”“尝试”“实际写回”“验证结果”，不能把授权当成已完成工作。
+只写有证据的学习活动；没有证据时简短说明无法判断学生独立完成的部分。
+不使用“第几次提问”等轮次编号，
 也不暴露内部消息序号 userSeq 或 seq。
 不要写模型、提示词、审查、规则、系统是否合规，也不要比较 helpLevel 与 receivedLevel；
 这些信息只属于内部审查。没有代码或后续验证时，不得推断哪些部分由学生独立完成。
@@ -61,8 +59,10 @@ studentReport 只按领域、主题与请求结果概括，不使用“第几次
 
 REPORT_RULES += """
 observedWork.harnessJobs 是逐轮工程任务的服务端记录。status=failed 表示该轮没有应用文件修改；
+即使 commandSamples 显示沙箱里执行过编辑，failed/partial 任务的临时改动也没有写回学生工作区。
+只有 observedWork.aiChanges 才能证明工作区实际持久化了 AI 修改。
 commandSamples 只能证明命令被执行以及截取到的输出，不能仅凭命令文字或返回码推断测试通过。
-若某轮没有助教回复，但有工程命令记录，应在 studentReport 中如实区分“尝试运行”和“已完成修改”。
+若某轮没有助教回复，但有工程命令记录，应在 narrative 中如实区分“尝试运行”和“已完成修改”。
 activity=coding 用于直接请求编写、实现或修改源码文件，即使涉及算法或处理器设计；
 activity=algorithm 仅用于询问方案、原理、复杂度或设计选择而没有要求直接写入源码。
 任务失败不改变学生当初请求的活动类别。
@@ -176,10 +176,8 @@ def build_help_report(messages, provider, observed_work=None):
                                         min(turn["helpLevel"], 2))
         counts[turn["activity"]] += 1
     return {
-        "studentReport": {**{key: _student_report_text(student_report[key])
-                             for key in STUDENT_FIELDS},
-                          "activityCounts": counts,
-                          "workSummary": _work_summary(observed_work)},
+        "studentReport": {"narrative": _student_report_text(
+            student_report["narrative"]), "activityCounts": counts},
         "systemReview": {
             "turns": turns,
             "observedWork": observed_work,
@@ -225,6 +223,7 @@ def report_for_session(session):
     for job in session.harness_jobs.order_by("created")[:30]:
         commands = list(session.tool_calls.filter(
             call_id__startswith=f"harness-{job.id}-",
+            name="harness_command",
         ).order_by("-created").values("arguments", "ok", "result_excerpt")[:5])
         harness_jobs.append({
             "userSeq": job.user_message.seq, "action": job.action,
