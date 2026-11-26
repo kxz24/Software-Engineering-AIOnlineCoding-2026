@@ -19,6 +19,7 @@ from django.db.models import F
 from problem.project_package import safe_name
 
 from . import service, tools
+from .guard import SCOPE_EXAMPLES
 from .harness_scope import (ScopeReviewError, configured_scope_provider,
                             review_command_scope, review_edit_scope)
 from .models import AgentHarnessJob, AgentMessage, AgentToolCall, WorkspaceFile
@@ -29,26 +30,23 @@ from .models import AgentHarnessJob, AgentMessage, AgentToolCall, WorkspaceFile
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 
-SYSTEM_TEMPLATE = """You are a coding assistant in an exam workspace.
-Each response must contain exactly one bash command in a ```mswea_bash_command block.
-Keep the explanation before the command brief. Do not browse the network or
-inspect paths outside /workspace. Never attempt to access hidden grader files.
+SYSTEM_TEMPLATE = """你是考试工作区中的编程助教，始终用中文回答学生。
+每一步回复必须且只能包含一个放在 ```mswea_bash_command 代码块中的 bash 命令。
+命令前的说明要简短、使用中文。不得访问网络或 /workspace 以外的路径，
+不得尝试获取隐藏判题文件。
 """
 
-INSTANCE_TEMPLATE = """Student request: {{task}}
+INSTANCE_TEMPLATE = """学生本轮请求：{{task}}
 
-The workspace contains only the student's public project files. Follow only
-the current request. Do not independently complete other parts of the task.
-Read relevant files before editing. For a run-only request, execute the requested
-checks but do not edit files. For an edit request, change only the authorized
-scope and perform only necessary verification. The platform will reject changes
-outside that scope. Do not create files outside /workspace except temporary
-build files in /tmp. There is no network access.
+工作区仅包含学生可见的公开文件。只处理当前请求，不自行完成题目的其他部分。
+修改前先阅读相关文件。若本轮只授权运行，仅执行学生要求的检查，不修改源文件。
+若本轮只授权修改，只改授权范围内的文件，不运行程序、构建或测试；
+平台会拒绝范围外的改动。除 /tmp 中必要的临时文件外，不在 /workspace 外创建文件。
+容器不提供网络访问。
 
-When finished, use one command that prints COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
-on its first line and a concise, factual user-facing summary on later lines.
-Do not claim tests passed unless you observed their output.
-"""
+完成本轮请求后，用一个命令在首行打印 COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT，
+后续行用中文简洁、如实地向学生总结。未观察到测试结果时不得声称测试通过。
+""" + SCOPE_EXAMPLES
 
 
 def _base_url():
@@ -231,11 +229,11 @@ def execute_project_job(job):
                 return output
 
             environment.execute = tracked_execute
-            scope_note = (f"Only edit {target}." if job.scope == "file"
-                          else "You may edit the public project files relevant to this request.")
-            task = (f"{job.user_message.content}\n\nAuthorized action: {job.action}. "
+            scope_note = (f"只允许修改 {target}。" if job.scope == "file"
+                          else "只允许修改与本轮请求有关的公开项目文件。")
+            task = (f"{job.user_message.content}\n\n本轮授权动作：{job.action}。"
                     + (scope_note if job.action == "edit" else
-                       "Run only the checks the student requested; do not edit files."))
+                       "只运行学生要求的检查，不修改文件。"))
             try:
                 outcome = agent.run(task)
             finally:

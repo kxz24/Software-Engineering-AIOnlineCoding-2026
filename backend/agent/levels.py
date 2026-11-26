@@ -55,7 +55,7 @@ def tools_for_turn(level, action="answer"):
     if level != AgentSession.LEVEL_EDIT:
         return tools_for_level(level)
     if action == "edit":
-        return TOOLS_BY_LEVEL[level]
+        return READ_TOOLS + WRITE_TOOLS
     if action == "run":
         return READ_TOOLS + RUN_TOOLS
     return READ_TOOLS

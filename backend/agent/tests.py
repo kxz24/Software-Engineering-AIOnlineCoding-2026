@@ -207,6 +207,13 @@ class AdviseGuardTests(SimpleTestCase):
         self.assertIn("所有独立的越界问题", REVIEW_RULES)
         self.assertNotIn("只指出第一处", REVIEW_RULES)
 
+    def test_scope_examples_cover_question_diagnosis_implementation_and_execution(self):
+        from .guard import SCOPE_EXAMPLES, SCOPE_RULES
+        for text in ("现在做什么", "为什么报错", "大体思路", "实现这个函数", "运行测试"):
+            self.assertIn(text, SCOPE_EXAMPLES)
+        self.assertIn("只有明确请求实现", SCOPE_RULES)
+        self.assertIn("问题的自然含义", SCOPE_RULES)
+
     def test_file_only_answer_rejects_unverified_build_claim(self):
         from .service import _open_scope_issue
         question = "这份文件目前实现了什么？只根据当前文件说明。"
@@ -480,6 +487,14 @@ class AgentBaseTestCase(TestCase):
 
 
 class LevelTests(AgentBaseTestCase):
+    def test_both_modes_receive_scope_examples_without_student_prohibitions(self):
+        from .guard import SCOPE_EXAMPLES
+        for mode in (Exam.AI_LIMITED, Exam.AI_OPEN):
+            session = self.create_session(self.create_exam(mode))
+            prompt = service._system_prompt(session)
+            self.assertIn(SCOPE_EXAMPLES, prompt)
+            self.assertIn("学生无需", prompt)
+
     def test_ai_mode_mapping(self):
         cases = {
             Exam.AI_CLOSED: AgentSession.LEVEL_NONE,
@@ -505,6 +520,7 @@ class LevelTests(AgentBaseTestCase):
         self.assertIn("run_sample_tests", tools_for_turn(AgentSession.LEVEL_EDIT, "run"))
         self.assertNotIn("write_file", tools_for_turn(AgentSession.LEVEL_EDIT, "run"))
         self.assertIn("write_file", tools_for_turn(AgentSession.LEVEL_EDIT, "edit"))
+        self.assertNotIn("run_sample_tests", tools_for_turn(AgentSession.LEVEL_EDIT, "edit"))
         self.assertNotIn("run_sample_tests", tools_for_turn(AgentSession.LEVEL_ADVISE, "edit"))
         self.assertNotIn("write_file", tools_for_turn(AgentSession.LEVEL_ADVISE, "edit"))
 
@@ -714,6 +730,60 @@ class SessionAndMessageTests(AgentBaseTestCase):
 
 
 class ToolPermissionTests(AgentBaseTestCase):
+    def test_open_explanation_does_not_turn_into_implementation(self):
+        session = self.create_session(self.create_exam(Exam.AI_OPEN))
+        service.add_user_message(session, "这段程序目前在做什么？")
+        provider = RoundProvider([
+            text_round("它目前只有占位注释。我顺便把完整实现写给你：\n```python\nprint(1)\n```"),
+            text_round("当前文件只有占位注释，还没有实际计算逻辑。"),
+        ])
+
+        class Reviewer:
+            def review(self, question, answer):
+                bad = "```" in answer
+                return {"allowed": not bad,
+                        "feedback": "删除未请求的实现代码" if bad else "",
+                        "user_attack": False, "attack_evidence": "", "usage": {}}
+
+        events = list(service.generate_events(
+            session, provider=provider, reviewer=Reviewer(), turn_action="answer"))
+        answer = "".join(e.get("text", "") for e in events if e["type"] == "delta")
+        self.assertEqual(answer, "当前文件只有占位注释，还没有实际计算逻辑。")
+        self.assertEqual(provider.calls, 2)
+        self.assertFalse(CodeChange.objects.filter(session=session).exists())
+
+    @override_settings(AGENT_PROVIDER="deepseek", DEEPSEEK_API_KEY="test")
+    def test_open_write_is_reviewed_against_current_request(self):
+        session = self.create_session(self.create_exam(Exam.AI_OPEN))
+        tools.ensure_workspace(session, "main.py", "# 尚未实现\n")
+        service.add_user_message(session, "这段程序目前做什么？", action="edit")
+        provider = RoundProvider([[
+            {"type": "tool_call", "id": "write-1", "name": "write_file",
+             "arguments": {"path": "main.py", "content": "print(1)\n",
+                           "expected_revision": 1}},
+            {"type": "done", "finishReason": "tool_calls"},
+        ], text_round("当前仅有一行注释。")])
+
+        class Reviewer:
+            def review(self, question, answer):
+                return {"allowed": True, "feedback": "", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+
+        with patch("agent.service.configured_scope_provider"), \
+                patch("agent.service.review_edit_scope",
+                      return_value=(False, "只询问现状，没有请求实现", {
+                          "inputTokens": 0, "outputTokens": 0,
+                          "cacheHitTokens": 0, "cacheMissTokens": 0,
+                      })) as review:
+            events = list(service.generate_events(
+                session, provider=provider, reviewer=Reviewer(), turn_action="edit"))
+        self.assertEqual(review.call_count, 1)
+        self.assertFalse(next(e for e in events if e["type"] == "tool_result")["ok"])
+        self.assertEqual(WorkspaceFile.objects.get(exam=session.exam, student=self.student,
+                                                    problem=self.problem, path="main.py").content,
+                         "# 尚未实现\n")
+        self.assertFalse(CodeChange.objects.filter(session=session).exists())
+
     def test_open_answer_revises_unverified_file_only_claim(self):
         exam = self.create_exam(Exam.AI_OPEN)
         session = self.create_session(exam)
@@ -1093,7 +1163,7 @@ class ToolPermissionTests(AgentBaseTestCase):
             ],
             text_round("已经改好了。"),
         ])
-        events = list(service.generate_events(session, provider=provider))
+        events = list(service.generate_events(session, provider=provider, turn_action="edit"))
         self.assertTrue(any(e["type"] == "change" for e in events))
         change = CodeChange.objects.get(session=session)
         self.assertEqual(change.before_text, "print(1)\n")
@@ -1249,6 +1319,37 @@ class ProjectHarnessRoutingTests(AgentBaseTestCase):
 
 
 class ProjectHarnessArchiveTests(SimpleTestCase):
+    def test_harness_prompt_is_chinese_and_does_not_auto_run_after_edit(self):
+        from .harness import INSTANCE_TEMPLATE, SYSTEM_TEMPLATE
+        self.assertIn("始终用中文回答", SYSTEM_TEMPLATE)
+        self.assertIn("若本轮只授权修改", INSTANCE_TEMPLATE)
+        self.assertIn("不运行程序、构建或测试", INSTANCE_TEMPLATE)
+        self.assertIn("学生无需在提问中附加", INSTANCE_TEMPLATE)
+
+    def test_edit_command_review_forbids_unrequested_execution(self):
+        from .harness_scope import review_command_scope
+
+        provider = RoundProvider([text_round(
+            '{"allowed":true,"feedback":""}'
+        )])
+        allowed, feedback, _ = review_command_scope(
+            "把注释改成中文", "edit", "file", "main.py",
+            "pytest -q", provider)
+        self.assertFalse(allowed)
+        self.assertIn("运行", feedback)
+        self.assertEqual(provider.calls, 0)
+        allowed, feedback, _ = review_command_scope(
+            "把注释改成中文", "edit", "file", "main.py",
+            "cd src && ./test.sh", provider)
+        self.assertFalse(allowed)
+        self.assertIn("脚本", feedback)
+        self.assertEqual(provider.calls, 0)
+        allowed, _, _ = review_command_scope(
+            "修改文档", "edit", "file", "README.md",
+            "printf '%s\\n' '请用 python 解释这一行' > README.md", provider)
+        self.assertTrue(allowed)
+        self.assertEqual(provider.calls, 1)
+
     def test_command_review_uses_current_request_and_action(self):
         from .harness_scope import review_command_scope
 

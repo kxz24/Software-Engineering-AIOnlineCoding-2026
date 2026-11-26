@@ -56,7 +56,7 @@ interface AiOption {
 
 const AiOptions: AiOption[] = [
     { key: "open", title: "开放", desc: "完整对话与代码修改，全部留痕。", icon: "unlock" },
-    { key: "limited", title: "受限", desc: "仅解释与运行测试，不可直接写入代码。", icon: "shield-check" },
+    { key: "limited", title: "受限", desc: "仅解释与建议；学生自行编写和提交代码。", icon: "shield-check" },
     { key: "closed", title: "关闭", desc: "禁用 Agent，入口不可用。", icon: "lock" },
 ];
 

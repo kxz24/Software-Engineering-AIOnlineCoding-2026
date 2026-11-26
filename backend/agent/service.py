@@ -15,9 +15,11 @@ from django.utils import timezone
 from user.models import AuditLog
 
 from . import tools
-from .guard import GuardError, configured_reviewer
+from .guard import GuardError, SCOPE_EXAMPLES, configured_reviewer
+from .harness_scope import (ScopeReviewError, configured_scope_provider,
+                            review_edit_scope)
 from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level, tools_for_turn
-from .models import AgentMessage, AgentSession, WorkspaceFile
+from .models import AgentMessage, AgentSession, AgentToolCall, WorkspaceFile
 from .policy import (asks_for_check_targets_only, extract_scope_targets, localized_request,
                      scoped_violation, sanitize_scoped_text,
                      trim_unrequested_list_tail)
@@ -187,6 +189,7 @@ def _system_prompt(session):
         ability = (
             "你可以直接修改工作区代码：先用 read_workspace 读取文件，再用 write_file "
             "写入完整的新内容；每次写入前确认文件版本，避免覆盖。"
+            "学生无需在问题里声明不要修改或运行；只有明确请求相应行动才可执行。"
         )
     else:
         ability = (
@@ -234,6 +237,11 @@ def _system_prompt(session):
 
 【当前级别】{LEVEL_LABELS.get(session.level, session.level)}
 {ability}
+
+【通用边界】先识别学生当前真正请求的是解释、诊断、实现、修改还是运行。
+询问现状、原因或思路不授权你完成任务；不得因为某一步看起来有帮助就主动推进。
+只回答问题所需，任何工具行动须同时满足当前考试级别和本轮授权。
+{SCOPE_EXAMPLES}
 
 题目：{problem.title}
 语言：{problem.language}
@@ -385,7 +393,7 @@ def _review_open_scope(session, question, content, context, provider, reviewer,
     }, attack_evidence
 
 
-def generate_events(session, provider=None, reviewer=None, turn_action="edit"):
+def generate_events(session, provider=None, reviewer=None, turn_action="answer"):
     """
     生成一次 AI 回复的事件流（同步生成器）。
 
@@ -418,7 +426,8 @@ def generate_events(session, provider=None, reviewer=None, turn_action="edit"):
     else:
         context[0]["content"] += (
             "\n【本轮授权】学生允许修改代码。只处理本轮明确提出的范围，"
-            "完成必要验证后停止，不自行推进整题的其他部分。"
+            "可以读取文件，但不得运行程序、构建或测试；完成修改后停止，"
+            "不自行推进整题的其他部分。"
         )
     totals = _empty_totals()
     collected_tool_calls = []
@@ -619,10 +628,50 @@ def generate_events(session, provider=None, reviewer=None, turn_action="edit"):
                     "name": call["name"],
                     "arguments": call.get("arguments") or {},
                 }
-                ok, result = tools.execute_tool(
-                    call["name"], call.get("arguments") or {}, tool_context,
-                    session, call_id=call["id"], allowed_tools=allowed_tools,
-                )
+                arguments = call.get("arguments") or {}
+                edit_review = (call["name"] == "write_file"
+                               and "write_file" in allowed_tools
+                               and scope_guard
+                               and getattr(settings, "AGENT_PROVIDER", "mock") == "deepseek"
+                               and isinstance(arguments.get("path"), str)
+                               and isinstance(arguments.get("content"), str))
+                if edit_review:
+                    path = arguments["path"]
+                    current = WorkspaceFile.objects.filter(
+                        exam=session.exam, student=session.student,
+                        problem=session.problem, path=path).first()
+                    snapshot = {path: ((current.content, current.revision)
+                                       if current else ("", 0))}
+                    try:
+                        approved, feedback, review_usage = review_edit_scope(
+                            question, {path: arguments["content"]}, snapshot,
+                            configured_scope_provider())
+                        _add_usage(session, {
+                            "input": review_usage["inputTokens"],
+                            "output": review_usage["outputTokens"],
+                            "cache_hit": review_usage["cacheHitTokens"],
+                            "cache_miss": review_usage["cacheMissTokens"],
+                        })
+                    except ScopeReviewError as exc:
+                        approved, feedback = False, str(exc)
+                    AgentToolCall.objects.create(
+                        session=session, call_id=f"review-{call['id']}"[:64],
+                        name="write_file_scope_review", arguments={"path": path},
+                        ok=approved, result_excerpt=feedback[:500],
+                    )
+                    if not approved:
+                        ok = False
+                        result = json.dumps({"ok": False, "error":
+                                             "本轮请求未授权这项修改：" + feedback},
+                                            ensure_ascii=False)
+                    else:
+                        ok, result = tools.execute_tool(
+                            call["name"], arguments, tool_context, session,
+                            call_id=call["id"], allowed_tools=allowed_tools)
+                else:
+                    ok, result = tools.execute_tool(
+                        call["name"], arguments, tool_context, session,
+                        call_id=call["id"], allowed_tools=allowed_tools)
                 _add_message(
                     session, AgentMessage.ROLE_TOOL, content=result,
                     tool_call_id=call["id"], name=call["name"],
