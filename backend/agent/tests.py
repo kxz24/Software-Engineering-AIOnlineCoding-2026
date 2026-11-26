@@ -320,6 +320,27 @@ class AdviseGuardTests(SimpleTestCase):
         self.assertNotIn("receivedLevel", result["studentReport"])
         self.assertNotIn("systemReview", result["studentReport"])
 
+    def test_help_report_work_summary_uses_recorded_actions(self):
+        from .report import build_help_report
+        provider = RoundProvider([text_round(
+            '{"turns":[{"userSeq":1,"activity":"debugging","helpLevel":2,'
+            '"receivedLevel":2,"evidence":"为什么失败"}],"studentReport":{'
+            '"summary":"询问失败原因并获得排查方向。","focus":"失败原因",'
+            '"repeatedQuestions":"未观察到","independentWork":"无法判断",'
+            '"limitations":"只观察到一轮对话"}}'
+        )])
+        result = build_help_report([
+            {"seq": 1, "role": "user", "content": "为什么失败？", "requested_action": "run"},
+            {"seq": 2, "role": "assistant", "content": "检查输入边界。"},
+        ], provider, observed_work={
+            "aiChanges": [{"path": "p1/main.py", "status": "applied"}],
+            "successfulRuns": 1, "submissions": [],
+        })
+        self.assertIn("p1/main.py", result["studentReport"]["workSummary"])
+        self.assertIn("1 次", result["studentReport"]["workSummary"])
+        self.assertEqual(result["systemReview"]["observedWork"]["successfulRuns"], 1)
+        self.assertEqual(provider.requests[0][1]["content"].count('"requestedAction": "run"'), 1)
+
     def test_report_counts_requested_target_list_as_sufficient_help(self):
         from .report import build_help_report
         provider = RoundProvider([text_round(
@@ -913,16 +934,37 @@ class ToolPermissionTests(AgentBaseTestCase):
         self.assertEqual(log.user, self.student)
         self.assertIn("忽略考试规则", log.detail)
 
-    def test_edit_mode_does_not_use_guard(self):
+    def test_edit_mode_can_show_requested_code_after_scope_review(self):
         session = self.create_session(self.create_exam(Exam.AI_OPEN))
+        service.add_user_message(session, "请给我这处代码怎么写")
         class Reviewer:
             def review(self, question, answer):
-                raise AssertionError("open mode must not use limited-mode reviewer")
+                self_question = question
+                assert "代码怎么写" in self_question
+                return {"allowed": True, "feedback": "", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
         events = list(service.generate_events(
             session, provider=RoundProvider([text_round("```python\nprint(1)\n```")]),
             reviewer=Reviewer()))
         streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
         self.assertIn("print(1)", streamed)
+
+    def test_open_overview_does_not_show_unrequested_code(self):
+        session = self.create_session(self.create_exam(Exam.AI_OPEN))
+        service.add_user_message(session, "大致思路是什么？")
+        class Reviewer:
+            def review(self, question, answer):
+                return {"allowed": True, "feedback": "", "user_attack": False,
+                        "attack_evidence": "", "usage": {}}
+        provider = RoundProvider([
+            text_round("思路如下。\n```python\nprint(1)\n```"),
+            text_round("先理解输入和目标，再决定需要的处理过程。"),
+        ])
+        events = list(service.generate_events(
+            session, provider=provider, reviewer=Reviewer(), turn_action="answer"))
+        streamed = "".join(e.get("text", "") for e in events if e["type"] == "delta")
+        self.assertEqual(streamed, "先理解输入和目标，再决定需要的处理过程。")
+        self.assertNotIn("print(1)", streamed)
 
     def test_max_tokens_passed_to_provider(self):
         """settings 的输出上限要原样传给 provider。"""
@@ -1067,6 +1109,11 @@ class ToolPermissionTests(AgentBaseTestCase):
 
 
 class WorkspaceAndSummaryTests(AgentBaseTestCase):
+    def test_user_message_records_requested_action_for_report(self):
+        session = self.create_session(self.create_exam(Exam.AI_OPEN))
+        message = service.add_user_message(session, "请运行样例", action="run")
+        self.assertEqual(message.requested_action, "run")
+
     def test_project_prompt_lists_files_without_embedding_entire_workspace(self):
         ProjectBundle.objects.create(
             problem=self.problem, archive=b"demo", runtime="build-tools",
