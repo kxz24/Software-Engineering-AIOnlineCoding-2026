@@ -155,6 +155,9 @@ export function PrecheckPage() {
                     <Link className="btn btn-ghost" to={Routes.examList}>
                         <Icon name="arrow-left" size={14}/>返回我的考试
                     </Link>
+                    <Link className="btn btn-secondary" to={Routes.examResult(examId)}>
+                        <Icon name="file-text" size={14}/>查看提交记录
+                    </Link>
                 </div>
             </div>
 

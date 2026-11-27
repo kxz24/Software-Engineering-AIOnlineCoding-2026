@@ -3,13 +3,14 @@ import { useSelector } from "react-redux";
 import { NavLink, useHistory } from "react-router-dom";
 import { Store } from "../store";
 import { Brand } from "../components/Brand";
+import { BackButton } from "../components/BackButton";
 import { Icon } from "../components/Icon";
 import { Routes } from "../api/urls";
 import { roleLabel } from "../roles";
 import { logout, removeToken } from "../api/client";
 
 /** 学生端的一级入口，对应原型的顶部导航（考试须知随「进入考试」流程进入） */
-export type StudentNav = "exams" | "reports" | "precheck";
+export type StudentNav = "exams" | "reports" | "precheck" | "practice";
 
 interface Props {
     active: StudentNav;
@@ -27,6 +28,7 @@ export function StudentLayout({ active, children }: Props) {
     const navItems: { key: StudentNav; label: string; to: string }[] = [
         { key: "exams", label: "我的考试", to: Routes.examList },
         { key: "reports", label: "成绩报告", to: Routes.reports },
+        { key: "practice", label: "自由练习", to: Routes.practice },
     ];
 
     /** 退出登录：后端无状态，清掉本地令牌即可；后端未启动时也要能退出 */
@@ -44,6 +46,7 @@ export function StudentLayout({ active, children }: Props) {
         <div className="student-page">
             <header className="student-nav">
                 <div className="student-nav-left">
+                    <BackButton/>
                     <Brand/>
                     <nav className="nav-links">
                         {navItems.map(item => (

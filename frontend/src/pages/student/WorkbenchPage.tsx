@@ -748,6 +748,26 @@ export function WorkbenchPage() {
                         </div>
                         <div className="divider-v"/>
                         <div className="exam-name">{detail.title}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: 14 }}>
+                            <button type="button"
+                                    style={{ background: "none", border: "none", padding: 0,
+                                             color: "#cbd5e1", fontSize: 11, cursor: "pointer" }}
+                                    onClick={() => {
+                                        if (window.history.length > 1) {
+                                            history.goBack();
+                                        } else {
+                                            history.push(Routes.examList);
+                                        }
+                                    }}>
+                                返回
+                            </button>
+                            <button type="button"
+                                    style={{ background: "none", border: "none", padding: 0,
+                                             color: "#93c5fd", fontSize: 11, cursor: "pointer" }}
+                                    onClick={() => history.push(Routes.examResult(detail.id))}>
+                                提交记录
+                            </button>
+                        </div>
                     </div>
                     <div className="topbar-right">
                         <div className="chip chip-ai">

@@ -3,6 +3,7 @@ import { useSelector } from "react-redux";
 import { NavLink, useHistory } from "react-router-dom";
 import { Store } from "../store";
 import { Brand } from "../components/Brand";
+import { BackButton } from "../components/BackButton";
 import { Icon } from "../components/Icon";
 import { Routes } from "../api/urls";
 import { roleLabel } from "../roles";
@@ -76,7 +77,9 @@ export function TeacherLayout({ breadcrumb, children }: Props) {
             </aside>
             <div className="teacher-main">
                 <header className="teacher-topbar">
-                    <div className="breadcrumb">
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                        <BackButton/>
+                        <div className="breadcrumb">
                         {breadcrumb.map((crumb, index) => {
                             const last = index === breadcrumb.length - 1;
                             return (
@@ -86,6 +89,7 @@ export function TeacherLayout({ breadcrumb, children }: Props) {
                                 </React.Fragment>
                             );
                         })}
+                        </div>
                     </div>
                     <div className="topbar-actions">
                         <div className="avatar sm">{(user?.nickname || "师").slice(0, 1)}</div>

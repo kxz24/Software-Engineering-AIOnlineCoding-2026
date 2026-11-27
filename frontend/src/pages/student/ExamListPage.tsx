@@ -227,6 +227,14 @@ export function ExamListPage() {
                                     <span className="muted"> / {exam.maxScore ?? 0}</span>
                                 </td>
                                 <td>
+                                    {exam.mySubmissions > 0 && (
+                                        <>
+                                            <Link className="link" to={Routes.examResult(exam.id)}>
+                                                提交记录
+                                            </Link>
+                                            <span style={{ color: "#e2e8f0", margin: "0 6px" }}>|</span>
+                                        </>
+                                    )}
                                     {exam.studentStatus === "finished"
                                         ? <Link className="link" to={Routes.examReport(exam.id)}>查看报告</Link>
                                         : <Link className="link" to={Routes.examPrecheck(exam.id)}>进入考场</Link>}
