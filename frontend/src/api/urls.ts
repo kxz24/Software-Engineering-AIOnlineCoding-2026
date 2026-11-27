@@ -17,6 +17,8 @@ export const Urls = {
     audit: "/api/v1/audit", // GET 管理员
 
     problems: "/api/v1/problems", // GET 教师列表 / POST 创建
+    projectImport: "/api/v1/problems/import-project", // POST ZIP
+    projectPrepare: (problemId: number) => `/api/v1/problems/${problemId}/prepare`,
     problemDetail: (problemId: number) => `/api/v1/problems/${problemId}`, // GET / PATCH / DELETE
 
     exams: "/api/v1/exams", // GET 教师 / POST 创建

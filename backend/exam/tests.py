@@ -4,7 +4,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from problem.models import Problem
+from problem.models import Problem, ProjectBundle
 from user.models import User
 from utils.jwt import encrypt_password
 
@@ -368,6 +368,28 @@ class ExamManageTestCase(ExamBaseTestCase):
 
 
 class StudentExamTestCase(ExamBaseTestCase):
+    def test_project_submission_accepts_sparse_or_empty_file_overlay(self):
+        import json
+
+        self.problem1.type = Problem.TYPE_ENGINEERING
+        self.problem1.save(update_fields=["type"])
+        ProjectBundle.objects.create(
+            problem=self.problem1, archive=b"fixture", runtime="build-tools",
+            grader_command=["true"],
+            public_files={"large.txt": "x" * 220_000, "src/main.c": "starter"},
+        )
+        self.auth()
+        exam = self.create_exam()
+        self.assemble(exam["id"])
+        self.auth(self.student_token)
+        url = f"/api/v1/my/exams/{exam['id']}/problems/{self.problem1.id}/submissions"
+        changed = self.client.post(url, {"files": {"src/main.c": "answer"}}, format="json")
+        self.assertEqual(changed.status_code, 201)
+        saved = Submission.objects.get(pk=changed.json()["submission"]["id"])
+        self.assertEqual(json.loads(saved.code), {"files": {"src/main.c": "answer"}})
+        unchanged = self.client.post(url, {"files": {}}, format="json")
+        self.assertEqual(unchanged.status_code, 201)
+
     """学生侧：可见性、题面（不含隐藏测试）与提交"""
 
     def test_visibility(self):

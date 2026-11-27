@@ -8,6 +8,7 @@ import json
 import logging
 
 from django.conf import settings
+from django.db import transaction
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
@@ -23,7 +24,7 @@ from utils.jwt import login_required, role_required
 
 from . import service
 from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level
-from .models import AgentMessage, AgentSession, CodeChange, WorkspaceFile
+from .models import AgentHarnessJob, AgentMessage, AgentSession, CodeChange, WorkspaceFile
 from .providers import provider_info
 from .tools import ensure_workspace
 
@@ -265,6 +266,8 @@ class AgentMessageCreateView(APIView):
                 "properties": {
                     "clientMessageId": {"type": "string", "description": "幂等键"},
                     "content": {"type": "string", "description": "考生消息"},
+                    "action": {"type": "string", "enum": ["answer", "run", "edit"],
+                               "description": "本轮授权；默认只回答"},
                     "activeFile": {"type": "string", "description": "当前文件路径"},
                     "code": {"type": "string", "description": "当前编辑器内容"},
                     "workspaceRevision": {"type": "integer", "description": "前端持有的版本号"},
@@ -293,6 +296,20 @@ class AgentMessageCreateView(APIView):
         if len(text) > 8000:
             return Response({"message": "消息过长（上限 8000 字）"},
                             status=status.HTTP_400_BAD_REQUEST)
+        turn_action = content.get("action", "answer")
+        if turn_action not in ("answer", "run", "edit"):
+            return Response({"message": "无效的本轮授权"}, status=status.HTTP_400_BAD_REQUEST)
+        if session.level != AgentSession.LEVEL_EDIT and turn_action != "answer":
+            return Response({"message": "当前考试模式不允许运行或修改"},
+                            status=status.HTTP_403_FORBIDDEN)
+        use_harness = (turn_action in ("run", "edit")
+                       and hasattr(session.problem, "project_bundle")
+                       and getattr(settings, "AGENT_PROJECT_HARNESS_ENABLED", False))
+        if use_harness and session.harness_jobs.filter(
+                status__in=(AgentHarnessJob.STATUS_QUEUED,
+                            AgentHarnessJob.STATUS_RUNNING)).exists():
+            return Response({"message": "已有一项工程任务正在进行"},
+                            status=status.HTTP_409_CONFLICT)
         try:
             service.ensure_quota(session.exam, request.user)
         except service.QuotaExceeded as exc:
@@ -300,7 +317,19 @@ class AgentMessageCreateView(APIView):
 
         # 同步前端当前代码到服务端工作区（三级模式下不覆盖较新的 AI 写入）
         active_file = str(content.get("activeFile") or "").strip()
+        scope = content.get("scope", "file")
+        if use_harness:
+            if scope not in ("file", "project"):
+                return Response({"message": "无效的修改范围"}, status=400)
+            if turn_action == "edit" and scope == "file" and not active_file:
+                return Response({"message": "请选择要修改的文件"}, status=400)
         code = content.get("code")
+        project_paths = None
+        if hasattr(session.problem, "project_bundle"):
+            project_paths = {f"p{session.problem_id}/{name}" for name in
+                             session.problem.project_bundle.public_files}
+            if active_file and active_file not in project_paths:
+                return Response({"message": "工作区文件路径无效"}, status=400)
         if active_file and isinstance(code, str):
             revision = content.get("workspaceRevision")
             try:
@@ -313,7 +342,30 @@ class AgentMessageCreateView(APIView):
                 return Response({"message": str(exc)},
                                 status=status.HTTP_400_BAD_REQUEST)
 
-        user_message = service.add_user_message(session, text)
+        if project_paths is not None:
+            files = content.get("workspaceFiles") or {}
+            revisions = content.get("workspaceRevisions") or {}
+            if not isinstance(files, dict) or not isinstance(revisions, dict) or set(files) - project_paths:
+                return Response({"message": "工作区文件列表无效"}, status=400)
+            for path, body in files.items():
+                if not isinstance(body, str):
+                    return Response({"message": "工作区文件内容无效"}, status=400)
+                revision = revisions.get(path)
+                if revision is not None and type(revision) is not int:
+                    return Response({"message": "工作区版本号无效"}, status=400)
+                ensure_workspace(session, path, body, expected_revision=revision)
+
+        user_message = service.add_user_message(session, text, action=turn_action)
+        if use_harness:
+            job = AgentHarnessJob.objects.create(
+                session=session, user_message=user_message, action=turn_action,
+                scope=scope, target_path=active_file if scope == "file" else "",
+            )
+            from .tasks import run_agent_harness_job
+            transaction.on_commit(lambda: run_agent_harness_job.apply_async(
+                args=[job.id], queue="agent"))
+            return Response({"jobId": job.id, "status": job.status},
+                            status=status.HTTP_202_ACCEPTED)
 
         def stream():
             yield _sse("meta", {
@@ -321,7 +373,7 @@ class AgentMessageCreateView(APIView):
                 "userSeq": user_message.seq,
             })
             try:
-                for event in service.generate_events(session):
+                for event in service.generate_events(session, turn_action=turn_action):
                     event_type = event.pop("type")
                     if event_type == "done":
                         last = (
@@ -339,6 +391,41 @@ class AgentMessageCreateView(APIView):
         response["Cache-Control"] = "no-cache"
         response["X-Accel-Buffering"] = "no"
         return response
+
+
+class AgentHarnessJobView(APIView):
+    """Poll an authorized project harness run without holding an HTTP worker."""
+
+    @login_required
+    def get(self, request, session_id, job_id, *args, **kwargs):
+        session = _session_for_user(session_id, request.user)
+        if session is None:
+            return Response({"message": "会话不存在"}, status=404)
+        job = AgentHarnessJob.objects.filter(id=job_id, session=session).first()
+        if job is None:
+            return Response({"message": "任务不存在"}, status=404)
+        return Response({"jobId": job.id, "status": job.status,
+                         "steps": job.steps, "result": job.result,
+                         "error": job.error,
+                         "inputTokens": job.input_tokens,
+                         "outputTokens": job.output_tokens})
+
+
+class AgentHarnessJobCancelView(APIView):
+    @login_required
+    def post(self, request, session_id, job_id, *args, **kwargs):
+        session = _session_for_user(session_id, request.user)
+        if session is None:
+            return Response({"message": "会话不存在"}, status=404)
+        job = AgentHarnessJob.objects.filter(id=job_id, session=session).first()
+        if job is None:
+            return Response({"message": "任务不存在"}, status=404)
+        AgentHarnessJob.objects.filter(
+            id=job.id, status__in=(AgentHarnessJob.STATUS_QUEUED,
+                                   AgentHarnessJob.STATUS_RUNNING),
+        ).update(status=AgentHarnessJob.STATUS_CANCELLED, result="任务已停止，未应用文件修改。")
+        job.refresh_from_db()
+        return Response({"jobId": job.id, "status": job.status})
 
 
 class AgentMessagesView(AgentMessageListView, AgentMessageCreateView):

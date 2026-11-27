@@ -24,6 +24,7 @@ import {
     AgentSessionInfo,
     AgentStreamEvent,
     AgentWorkspaceFile,
+    cancelAgentHarnessJob,
     createAgentSession,
     fetchAgentCapabilities,
     fetchAgentChanges,
@@ -56,6 +57,15 @@ function problemPath(problem: StudentProblem): string {
     const extension = LanguageExtensions[problem.language] || "txt";
     const slug = problem.title.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 24);
     return `p${problem.order + 1}_${slug}.${extension}`;
+}
+
+function filesForProblem(problem: StudentProblem): { label: string; path: string; content: string }[] {
+    if (problem.publicFiles) {
+        return Object.entries(problem.publicFiles).map(([label, content]) => ({
+            label, path: `p${problem.problemId}/${label}`, content,
+        }));
+    }
+    return [{ label: problemPath(problem), path: problemPath(problem), content: problem.starterCode || "" }];
 }
 
 /** ISO 时间 → HH:MM:SS（时间线 / 提交记录用） */
@@ -245,6 +255,7 @@ export function WorkbenchPage() {
     const draftKey = `workbench-draft-${examId}`;
     const [savedDraft] = useState(() => loadDraft(draftKey));
     const [contents, setContents] = useState<Record<string, string>>({});
+    const [selectedProjectFile, setSelectedProjectFile] = useState<Record<number, string>>({});
     const [modified, setModified] = useState<Record<string, boolean>>({});
     /** 各文件显式选择过的语言（'' / 缺省 = 按扩展名自动推断） */
     const [languages, setLanguages] = useState<Record<string, string>>(() => ({
@@ -263,10 +274,11 @@ export function WorkbenchPage() {
         setContents(current => {
             const next = { ...current };
             detail.problems.forEach(item => {
-                const path = problemPath(item);
-                if (next[path] == null) {
-                    next[path] = (savedDraft && savedDraft.contents[path]) || item.starterCode || "";
-                }
+                filesForProblem(item).forEach(file => {
+                    if (next[file.path] == null) {
+                        next[file.path] = savedDraft?.contents[file.path] ?? file.content;
+                    }
+                });
             });
             return next;
         });
@@ -276,9 +288,14 @@ export function WorkbenchPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [detail]);
 
-    const currentPath = problem ? problemPath(problem) : "";
+    const currentPath = problem ? (
+        selectedProjectFile[problem.problemId] || filesForProblem(problem)[0]?.path || ""
+    ) : "";
+    const currentFileLabel = problem?.publicFiles && currentPath.includes("/") ?
+        currentPath.slice(currentPath.indexOf("/") + 1) : currentPath;
     const currentLanguage = (currentPath && languages[currentPath]) ||
-        (problem ? (LanguageExtensions[problem.language] ? problem.language : languageForPath(currentPath)) : "plaintext");
+        (problem ? (problem.publicFiles ? languageForPath(currentPath) :
+            (LanguageExtensions[problem.language] ? problem.language : languageForPath(currentPath))) : "plaintext");
 
     /** 把当前工作区写入本地草稿（自动保存与手动保存共用） */
     const writeDraft = () => {
@@ -327,10 +344,15 @@ export function WorkbenchPage() {
     // path -> 服务端工作区版本号；发送消息时带上，后端据此决定是否用编辑器内容覆盖
     const [agentRevisions, setAgentRevisions] = useState<Record<string, number>>({});
     const [agentDraft, setAgentDraft] = useState("");
+    const [agentAction, setAgentAction] = useState<"answer" | "run" | "edit">("answer");
+    const [agentScope, setAgentScope] = useState<"file" | "project">("file");
+    const [agentProgress, setAgentProgress] = useState<number | null>(null);
+    const [agentJobId, setAgentJobId] = useState<number | null>(null);
     const [agentTab, setAgentTab] = useState<"chat" | "changes">("chat");
     const agentAbortRef = useRef<AbortController | null>(null);
 
     const chatRef = useRef<HTMLDivElement>(null);
+    const agentStreamText = agentStream ? agentStream.text : "";
 
     // 追加消息 / 流式输出时滚动到会话底部
     useEffect(() => {
@@ -338,7 +360,7 @@ export function WorkbenchPage() {
         if (chat) {
             chat.scrollTop = chat.scrollHeight;
         }
-    }, [agentMessages.length, agentStream?.text, agentStreaming]);
+    }, [agentMessages.length, agentStreamText, agentStreaming]);
 
     /** 当前题目的提交次数 */
     const mySubmissions = useMemo(
@@ -362,12 +384,15 @@ export function WorkbenchPage() {
         if (!files.length) {
             return;
         }
-        const changed = files.some(file => contents[file.path] !== file.content);
+        const changed = files.some(file => contents[file.path] !== file.content &&
+            !(problem?.publicFiles && file.revision === 1 && contents[file.path] != null));
         if (changed) {
             setContents(current => {
                 const next = { ...current };
                 files.forEach(file => {
-                    next[file.path] = file.content;
+                    if (!(problem?.publicFiles && file.revision === 1 && next[file.path] != null)) {
+                        next[file.path] = file.content;
+                    }
                 });
                 return next;
             });
@@ -459,6 +484,10 @@ export function WorkbenchPage() {
         setAgentError(null);
         setAgentDisabledReason("");
         setAgentTab("chat");
+        setAgentAction("answer");
+        setAgentScope("file");
+        setAgentProgress(null);
+        setAgentJobId(null);
         setAgentRevisions({});
         if (detail && problem) {
             loadAgent();
@@ -483,6 +512,8 @@ export function WorkbenchPage() {
         setAgentError(null);
         setAgentTab("chat");
         setAgentDraft("");
+        setAgentProgress(null);
+        setAgentJobId(null);
         setAgentMessages(current => [...current, {
             seq: -Date.now(),
             role: "user",
@@ -560,6 +591,10 @@ export function WorkbenchPage() {
                 case "error":
                     setAgentError(event.message);
                     break;
+                case "progress":
+                    setAgentProgress(event.steps);
+                    setAgentJobId(event.jobId);
+                    break;
                 default:
                     break;
             }
@@ -567,9 +602,15 @@ export function WorkbenchPage() {
 
         streamAgentMessage(sessionIdValue, {
             content: text,
+            action: agentAction,
+            scope: agentScope,
             activeFile: currentPath,
             code: currentCode,
             workspaceRevision: currentPath ? agentRevisions[currentPath] : undefined,
+            workspaceFiles: problem?.publicFiles ? Object.fromEntries(
+                filesForProblem(problem).map(file => [file.path, contents[file.path] ?? file.content])
+            ) : undefined,
+            workspaceRevisions: problem?.publicFiles ? agentRevisions : undefined,
             clientMessageId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         }, handleEvent, controller.signal)
             .then(() => {
@@ -608,6 +649,13 @@ export function WorkbenchPage() {
             });
     };
 
+    const handleStopAgent = () => {
+        if (agentJobId !== null && agentSession) {
+            void cancelAgentHarnessJob(agentSession.sessionId, agentJobId);
+        }
+        agentAbortRef.current?.abort();
+    };
+
     /** 撤销一次 AI 修改并同步编辑器 */
     const handleRevert = (change: AgentChangeRecord) => {
         if (change.status !== "applied") {
@@ -638,15 +686,21 @@ export function WorkbenchPage() {
             toast(`本题提交次数已用完（上限 ${detail.submitLimit} 次）`, "warning");
             return;
         }
+        const projectFiles = problem.publicFiles ? Object.fromEntries(
+            Object.entries(problem.publicFiles)
+                .filter(([name, original]) => (contents[`p${problem.problemId}/${name}`] ?? original) !== original)
+                .map(([name, original]) => [name, contents[`p${problem.problemId}/${name}`] ?? original])
+        ) : undefined;
         const confirmed = window.confirm(
             `确认提交「任务 ${problem.order + 1}：${problem.title}」？\n` +
+            (projectFiles ? `本次提交 ${Object.keys(projectFiles).length} 个修改文件，其他文件沿用题包初始版本。\n` : "") +
             `提交后在后台自动判题，本题剩余 ${remaining - 1} 次机会。`
         );
         if (!confirmed) {
             return;
         }
         setSubmitting(true);
-        submitCode(detail.id, problem.problemId, currentCode, problem.language)
+        submitCode(detail.id, problem.problemId, currentCode, problem.language, projectFiles)
             .then(result => {
                 setSubmitting(false);
                 setSubmissions(current => [
@@ -788,7 +842,7 @@ export function WorkbenchPage() {
                                 disabled={submitting || finished || remaining <= 0}
                                 title={finished ? "考试已结束" : remaining <= 0 ? "本题提交次数已用完" : undefined}>
                             <Icon name="arrow-up" size={14} strokeWidth={1.9}/>
-                            提交答卷
+                            提交本题
                             <span className="sub">剩余 {remaining} 次</span>
                         </button>
                         <div className="avatar">{(user?.nickname || "生").slice(0, 1)}</div>
@@ -805,6 +859,11 @@ export function WorkbenchPage() {
                                 </span>
                                 <span className="meta-chip blue">{TypeLabels[problem.type] || problem.type}</span>
                                 <span className="meta-chip">{problem.language}</span>
+                                {problem.publicFiles && (
+                                    <span className="meta-chip blue">
+                                        {Object.keys(problem.publicFiles).length} 个文件一并提交
+                                    </span>
+                                )}
                             </>
                         )}
                         <span className="meta-chip">{detail.submitLimit} 次提交 / 题</span>
@@ -835,16 +894,32 @@ export function WorkbenchPage() {
                         <div className="section-label">{detail.course || "EXAM"}</div>
                         <div className="tree">
                             {problems.map(item => {
-                                const path = problemPath(item);
-                                const isActive = !!problem && item.problemId === problem.problemId;
+                                const files = filesForProblem(item);
                                 return (
-                                    <div key={item.problemId}
-                                         className={"tree-row lv1" + (isActive ? " active" : "")}
-                                         onClick={() => setCurrentProblemId(item.problemId)}>
-                                        <Icon name="file" size={13} strokeWidth={1.7} className="file-ico"/>
-                                        <span>{path}</span>
-                                        {modified[path] && <span className="modified-dot"/>}
-                                    </div>
+                                    <React.Fragment key={item.problemId}>
+                                        <div className="tree-row root" title={item.title}
+                                             onClick={() => setCurrentProblemId(item.problemId)}>
+                                            <Icon name="folder" size={13} strokeWidth={1.7} className="folder-ico"/>
+                                            <span className="tree-filename">任务 {item.order + 1} · {item.title}</span>
+                                            <span className="tree-count">{files.length}</span>
+                                        </div>
+                                        {files.map(file => {
+                                            const isActive = !!problem && item.problemId === problem.problemId && currentPath === file.path;
+                                            return (
+                                                <div key={file.path}
+                                                     className={"tree-row lv2" + (isActive ? " active" : "")}
+                                                     title={file.label}
+                                                     onClick={() => {
+                                                         setCurrentProblemId(item.problemId);
+                                                         setSelectedProjectFile(current => ({ ...current, [item.problemId]: file.path }));
+                                                     }}>
+                                                    <Icon name="file" size={13} strokeWidth={1.7} className="file-ico"/>
+                                                    <span className="tree-filename">{file.label}</span>
+                                                    {modified[file.path] && <span className="modified-dot"/>}
+                                                </div>
+                                            );
+                                        })}
+                                    </React.Fragment>
                                 );
                             })}
                             {problems.length === 0 && (
@@ -920,7 +995,7 @@ export function WorkbenchPage() {
                                         <Icon name="sparkles" size={13}/>
                                         <span>
                                             <strong>AI 使用策略：{AiModeLabels[detail.aiMode] || detail.aiMode}模式</strong>
-                                            {" · 对话留痕将计入过程报告（Agent 服务下一迭代接入）"}
+                                            {" · AI 对话会留痕，可用于学习过程分析"}
                                         </span>
                                     </div>
                                 </div>
@@ -984,7 +1059,7 @@ export function WorkbenchPage() {
                             <div className="editor-tabs">
                                 <div className={"editor-tab active"}>
                                     <Icon name="file" size={12} stroke="#2563eb"/>
-                                    {currentPath || "—"}
+                                    {currentFileLabel || "—"}
                                     {modified[currentPath] && <span className="modified-dot"/>}
                                 </div>
                                 <div className="editor-actions">
@@ -1037,7 +1112,7 @@ export function WorkbenchPage() {
                                 {agentCaps && (
                                     <span className="mode-chip">
                                         <Icon name="lock" size={10} strokeWidth={2}/>
-                                        {agentCaps.canEditCode ? "可改代码" : "仅思路"}
+                                        {agentCaps.canEditCode ? "可改代码" : "按需答疑"}
                                     </span>
                                 )}
                                 <span className="mode-chip">
@@ -1056,7 +1131,7 @@ export function WorkbenchPage() {
                                     修改{agentChanges.length > 0 ? ` ${agentChanges.length}` : ""}
                                 </span>
                                 <span className="agent-tab-hint">
-                                    {agentCaps.canEditCode ? "AI 可以直接修改工作区" : "AI 仅给思路（代码会被过滤）"}
+                                    {agentCaps.canEditCode ? "AI 可以直接修改工作区" : "AI 按提问范围回答，不修改工作区"}
                                 </span>
                             </div>
                         )}
@@ -1091,7 +1166,7 @@ export function WorkbenchPage() {
                                     <div className="msg-agent">
                                         <div className="agent-meta">
                                             <span className="name">Coding Agent</span>
-                                            <span className="time">生成中…</span>
+                                            <span className="time">回答处理中…</span>
                                         </div>
                                         {agentStream.text && (
                                             <div className="agent-card">{renderAgentText(agentStream.text)}</div>
@@ -1109,7 +1184,7 @@ export function WorkbenchPage() {
                                         ))}
                                         {!agentStream.text && agentStream.tools.length === 0 && (
                                             <div className="agent-card">
-                                                <div className="agent-text muted">思考中…</div>
+                                                <div className="agent-text muted">正在生成并审核回复…</div>
                                             </div>
                                         )}
                                     </div>
@@ -1120,7 +1195,7 @@ export function WorkbenchPage() {
                                             可以问我题目思路、帮你看代码或分析 bug。
                                             {agentCaps.canEditCode
                                                 ? "当前级别允许我直接修改工作区。"
-                                                : "当前级别我只给思路和调试方向，不提供完整代码，也不会改动工作区。"}
+                                                : "我会针对你的具体问题回答，不提供整题代码，也不会改动工作区。"}
                                         </div>
                                     )}
                             </div>
@@ -1162,8 +1237,8 @@ export function WorkbenchPage() {
                                               agentDisabledReason ? "本场考试未开启 AI"
                                                   : !agentCaps ? (agentLoading ? "正在加载 AI…" : "AI 暂不可用")
                                                       : !agentCaps.ready ? "AI 暂不可用：未配置模型密钥"
-                                                          : agentCaps.canEditCode ? "描述问题，AI 可以直接修改代码…"
-                                                              : "描述问题，AI 会给出思路（不提供完整代码）…"
+                                                          : agentCaps.canEditCode ? "描述当前问题；如需运行或修改，请选择本轮授权…"
+                                                              : "描述你想了解的概念、思路或具体卡住的地方…"
                                           }
                                           spellCheck={false}
                                           onChange={event => setAgentDraft(event.target.value)}
@@ -1175,9 +1250,29 @@ export function WorkbenchPage() {
                                           }}/>
                                 <div className="input-toolbar">
                                     <div className="input-tools">
+                                        {agentCaps?.canEditCode && (
+                                            <select value={agentAction}
+                                                    disabled={agentStreaming}
+                                                    aria-label="本轮 AI 授权"
+                                                    onChange={event => setAgentAction(event.target.value as "answer" | "run" | "edit")}>
+                                                <option value="answer">仅回答</option>
+                                                <option value="run">运行验证</option>
+                                                <option value="edit">允许修改</option>
+                                            </select>
+                                        )}
+                                        {agentCaps?.canEditCode && problem?.publicFiles && agentAction === "edit" && (
+                                            <select value={agentScope}
+                                                    disabled={agentStreaming}
+                                                    aria-label="本轮修改范围"
+                                                    onChange={event => setAgentScope(event.target.value as "file" | "project")}>
+                                                <option value="file">仅当前文件</option>
+                                                <option value="project">整个项目</option>
+                                            </select>
+                                        )}
                                         <span className="input-hint">
                                             {agentStreaming
-                                                ? "正在生成，可点击右侧停止"
+                                                ? agentProgress === null ? "正在生成，可点击右侧停止"
+                                                    : `工程任务已进行 ${agentProgress} 步`
                                                 : "Enter 发送 · Shift+Enter 换行"}
                                         </span>
                                         {agentCaps && (
@@ -1191,7 +1286,7 @@ export function WorkbenchPage() {
                                     {agentStreaming ? (
                                         <button className="send-btn" type="button"
                                                 title="停止生成"
-                                                onClick={() => agentAbortRef.current?.abort()}>
+                                                onClick={handleStopAgent}>
                                             停止
                                         </button>
                                     ) : (
@@ -1205,7 +1300,7 @@ export function WorkbenchPage() {
                             </div>
                             <div className="agent-foot">
                                 <Icon name="lock" size={10} strokeWidth={2}/>
-                                对话将随试卷冻结，并计入过程评分
+                                对话会留痕，可供学习过程分析
                             </div>
                         </div>
                     </aside>

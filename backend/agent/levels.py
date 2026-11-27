@@ -21,22 +21,22 @@ LEVEL_LABELS = {
     AgentSession.LEVEL_EDIT: "AI 协作",
 }
 
-# 只读工具：读题面 / 工作区 / 自己的提交 / 跑公开样例
+# 受限模式仅能读取题面、工作区和自己的提交记录。
 READ_TOOLS = (
     "list_files",
     "read_workspace",
     "get_problem",
     "list_submissions",
-    "run_sample_tests",
 )
 
-# 写工具：只有三级（open）会话可见
+# 运行程序与写文件都只开放给协作模式。
+RUN_TOOLS = ("run_sample_tests",)
 WRITE_TOOLS = ("write_file",)
 
 TOOLS_BY_LEVEL = {
     AgentSession.LEVEL_NONE: (),
     AgentSession.LEVEL_ADVISE: READ_TOOLS,
-    AgentSession.LEVEL_EDIT: READ_TOOLS + WRITE_TOOLS,
+    AgentSession.LEVEL_EDIT: READ_TOOLS + RUN_TOOLS + WRITE_TOOLS,
 }
 
 
@@ -48,6 +48,17 @@ def level_for_exam(exam):
 def tools_for_level(level):
     """该级别可用的工具名（有序）。"""
     return TOOLS_BY_LEVEL.get(level, ())
+
+
+def tools_for_turn(level, action="answer"):
+    """The exam level is an upper bound; each student turn grants less by default."""
+    if level != AgentSession.LEVEL_EDIT:
+        return tools_for_level(level)
+    if action == "edit":
+        return READ_TOOLS + WRITE_TOOLS
+    if action == "run":
+        return READ_TOOLS + RUN_TOOLS
+    return READ_TOOLS
 
 
 def can_edit_code(level):

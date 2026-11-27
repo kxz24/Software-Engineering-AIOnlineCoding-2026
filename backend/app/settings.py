@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -205,6 +206,17 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 # 判题沙箱镜像（由 backend/judge/Dockerfile 构建）
 JUDGE_IMAGE = os.environ.get("JUDGE_IMAGE", "aicoding-judge:latest")
+PROJECT_JUDGE_RUNTIMES = {"build-tools": os.environ.get(
+    "PROJECT_JUDGE_IMAGE", "aicoding-project-judge:latest"
+)}
+_extra_project_runtimes = json.loads(os.environ.get("PROJECT_JUDGE_RUNTIMES_JSON", "{}"))
+if (not isinstance(_extra_project_runtimes, dict) or
+        any(not isinstance(name, str) or not name or
+            not isinstance(image, str) or not image
+            for name, image in _extra_project_runtimes.items())):
+    raise ValueError("PROJECT_JUDGE_RUNTIMES_JSON must map runtime names to image names")
+PROJECT_JUDGE_RUNTIMES.update(_extra_project_runtimes)
+PROJECT_MANAGED_BASE_IMAGE = os.environ.get("PROJECT_MANAGED_BASE_IMAGE", "python:3.11-slim")
 # 测试环境可关掉入队，避免依赖 Redis
 JUDGE_ENQUEUE_ENABLED = os.environ.get("JUDGE_ENQUEUE_ENABLED", "1") == "1"
 # 单次判题的整体墙钟上限（秒），需小于 CELERY_TASK_TIME_LIMIT
@@ -218,6 +230,19 @@ AGENT_PROVIDER = os.environ.get("AGENT_PROVIDER", "mock")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 AGENT_MODEL = os.environ.get("AGENT_MODEL", "deepseek-chat")
+AGENT_GUARD_ENABLED = os.environ.get("AGENT_GUARD_ENABLED", "1") == "1"
+AGENT_SCOPE_GUARD_ENABLED = os.environ.get("AGENT_SCOPE_GUARD_ENABLED", "1") == "1"
+AGENT_PROJECT_HARNESS_ENABLED = os.environ.get("AGENT_PROJECT_HARNESS_ENABLED", "0") == "1"
+AGENT_HARNESS_MODEL = os.environ.get("AGENT_HARNESS_MODEL", AGENT_MODEL)
+AGENT_HARNESS_MAX_STEPS = int(os.environ.get("AGENT_HARNESS_MAX_STEPS", "20"))
+AGENT_HARNESS_WALL_SECONDS = int(os.environ.get("AGENT_HARNESS_WALL_SECONDS", "600"))
+AGENT_GUARD_MODEL = os.environ.get("AGENT_GUARD_MODEL", "Qwen3.8-Flash")
+AGENT_REPORT_MODEL = os.environ.get("AGENT_REPORT_MODEL", AGENT_GUARD_MODEL)
+AGENT_GUARD_BASE_URL = os.environ.get("AGENT_GUARD_BASE_URL", DEEPSEEK_BASE_URL)
+AGENT_GUARD_TIMEOUT = int(os.environ.get("AGENT_GUARD_TIMEOUT", "45"))
+AGENT_GUARD_DISABLE_THINKING = os.environ.get("AGENT_GUARD_DISABLE_THINKING", "1") == "1"
+AGENT_RETRY_DISABLE_THINKING = os.environ.get("AGENT_RETRY_DISABLE_THINKING", "1") == "1"
+AGENT_REPORT_DISABLE_THINKING = os.environ.get("AGENT_REPORT_DISABLE_THINKING", "1") == "1"
 # 单次回复的最大输出 token 与工具轮次上限
 # 说明：该网关把思考(reasoning) token 也计入 max_tokens，上限过低会把正文截断
 AGENT_MAX_OUTPUT_TOKENS = int(os.environ.get("AGENT_MAX_OUTPUT_TOKENS", "4096"))
@@ -227,4 +252,4 @@ AGENT_HISTORY_MESSAGES = int(os.environ.get("AGENT_HISTORY_MESSAGES", "40"))
 # 模型请求超时（秒）
 AGENT_REQUEST_TIMEOUT = int(os.environ.get("AGENT_REQUEST_TIMEOUT", "180"))
 # 提示词版本，写入 AgentSession.prompt_version
-AGENT_PROMPT_VERSION = os.environ.get("AGENT_PROMPT_VERSION", "v1")
+AGENT_PROMPT_VERSION = os.environ.get("AGENT_PROMPT_VERSION", "v3-scoped")

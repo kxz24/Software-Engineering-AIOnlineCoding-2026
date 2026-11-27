@@ -46,6 +46,9 @@ def problem_summary(problem):
         "practiceEnabled": problem.practice_enabled,
         "sampleCount": problem.samples.filter(is_sample=True).count(),
         "hiddenCount": problem.samples.filter(is_sample=False).count(),
+        "hasProjectBundle": hasattr(problem, "project_bundle"),
+        "preparationStatus": problem.project_bundle.preparation_status if hasattr(problem, "project_bundle") else None,
+        "preparationMessage": problem.project_bundle.preparation_message if hasattr(problem, "project_bundle") else "",
         "updated": problem.updated,
     }
 
@@ -56,6 +59,7 @@ def problem_detail(problem):
         **problem_summary(problem),
         "description": problem.description,
         "starterCode": problem.starter_code,
+        "publicFiles": problem.project_bundle.public_files if hasattr(problem, "project_bundle") else None,
         "createdBy": problem.created_by.username if problem.created_by else "",
         "samples": [
             {

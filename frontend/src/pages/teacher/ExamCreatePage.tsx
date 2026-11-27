@@ -56,7 +56,7 @@ interface AiOption {
 
 const AiOptions: AiOption[] = [
     { key: "open", title: "开放", desc: "完整对话与代码修改，全部留痕。", icon: "unlock" },
-    { key: "limited", title: "受限", desc: "仅解释与运行测试，不可直接写入代码。", icon: "shield-check" },
+    { key: "limited", title: "受限", desc: "仅解释与建议；学生自行编写和提交代码。", icon: "shield-check" },
     { key: "closed", title: "关闭", desc: "禁用 Agent，入口不可用。", icon: "lock" },
 ];
 
@@ -327,7 +327,7 @@ export function ExamCreatePage() {
                                 <span className="section-num">4</span>
                                 <div>
                                     <div className="section-title">AI 使用策略</div>
-                                    <div className="section-sub">决定考生可以使用 Coding Agent 的范围（Agent 服务下一迭代接入）</div>
+                                    <div className="section-sub">决定考生可以使用 Coding Agent 的范围</div>
                                 </div>
                             </div>
                             <div className="radio-row">

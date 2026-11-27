@@ -87,7 +87,14 @@ export type AgentStreamEvent =
     | { type: "change"; changeId: number; path: string; status: string; revisionAfter: number; additions: number; deletions: number; diff: string }
     | { type: "usage"; inputTokens: number; outputTokens: number; cacheHitTokens: number; cacheMissTokens: number }
     | { type: "done"; finishReason: string; assistantSeq?: number | null }
-    | { type: "error"; code: string; message: string };
+    | { type: "error"; code: string; message: string }
+    | { type: "progress"; jobId: number; steps: number; status: string };
+
+export function cancelAgentHarnessJob(sessionId: number, jobId: number): Promise<{ status: string }> {
+    return request(`/sessions/${sessionId}/jobs/${jobId}/cancel`, {
+        method: "POST", body: {},
+    });
+}
 
 async function request<T>(path: string, options: {
     method?: string;
@@ -253,9 +260,13 @@ export async function streamAgentMessage(
     sessionId: number,
     payload: {
         content: string;
+        action?: "answer" | "run" | "edit";
+        scope?: "file" | "project";
         activeFile?: string;
         code?: string;
         workspaceRevision?: number;
+        workspaceFiles?: Record<string, string>;
+        workspaceRevisions?: Record<string, number>;
         clientMessageId?: string;
     },
     onEvent: (event: AgentStreamEvent) => void,
@@ -282,6 +293,53 @@ export async function streamAgentMessage(
     if (!response.ok) {
         const json = await response.json().catch(() => ({}));
         throw new ApiError((json as { message?: string }).message || "发送失败。", response.status);
+    }
+    if (response.status === 202) {
+        const queued = await response.json() as { jobId: number };
+        let lastSteps = -1;
+        onEvent({ type: "progress", jobId: queued.jobId, steps: 0, status: "queued" });
+        while (!signal?.aborted) {
+            await new Promise<void>(resolve => setTimeout(resolve, 2000));
+            if (signal?.aborted) return;
+            const poll = await fetch(`${AgentBase}/sessions/${sessionId}/jobs/${queued.jobId}`, {
+                headers: { "Authorization": getToken() || "" }, signal,
+            });
+            if (!poll.ok) throw new ApiError("无法读取工程任务状态。", poll.status);
+            const job = await poll.json() as {
+                status: string; steps: number; result: string; error: string;
+                inputTokens: number; outputTokens: number;
+            };
+            if (job.steps !== lastSteps) {
+                onEvent({ type: "progress", jobId: queued.jobId,
+                    steps: job.steps, status: job.status });
+                lastSteps = job.steps;
+            }
+            if (job.status === "done") {
+                if (job.result) onEvent({ type: "delta", text: job.result });
+                onEvent({ type: "usage", inputTokens: job.inputTokens,
+                    outputTokens: job.outputTokens, cacheHitTokens: 0, cacheMissTokens: 0 });
+                onEvent({ type: "done", finishReason: "stop" });
+                return;
+            }
+            if (job.status === "partial") {
+                if (job.result) onEvent({ type: "delta", text: job.result });
+                onEvent({ type: "usage", inputTokens: job.inputTokens,
+                    outputTokens: job.outputTokens, cacheHitTokens: 0, cacheMissTokens: 0 });
+                onEvent({ type: "done", finishReason: "length" });
+                return;
+            }
+            if (job.status === "failed") {
+                onEvent({ type: "error", code: "harness", message: job.error });
+                onEvent({ type: "done", finishReason: "error" });
+                return;
+            }
+            if (job.status === "cancelled") {
+                onEvent({ type: "error", code: "cancelled", message: "工程任务已停止。" });
+                onEvent({ type: "done", finishReason: "cancelled" });
+                return;
+            }
+        }
+        return;
     }
     if (!response.body) {
         throw new ApiError("当前浏览器不支持流式响应。", 0);

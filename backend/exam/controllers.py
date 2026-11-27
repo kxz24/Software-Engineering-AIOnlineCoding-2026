@@ -143,6 +143,10 @@ def publish_exam(user, exam):
         return "结束时间必须晚于开始时间", False
     if not exam.exam_problems.exists():
         return "请先从题库选题组卷", False
+    for item in exam.exam_problems.select_related("problem"):
+        bundle = getattr(item.problem, "project_bundle", None)
+        if bundle is not None and bundle.preparation_status != "ready":
+            return f"工程题「{item.problem.title}」的环境尚未自检通过", False
     if not open_to_all(exam) and not exam.exam_candidates.exists():
         return "考生名单为空", False
 
@@ -270,6 +274,7 @@ def _problem_for_student(item, best_score=0):
         "difficulty": problem.difficulty,
         "description": problem.description,
         "starterCode": problem.starter_code,
+        "publicFiles": problem.project_bundle.public_files if hasattr(problem, "project_bundle") else None,
         "samples": [
             {"name": s.name, "input": s.input_data, "expected": s.expected_output}
             for s in problem.samples.filter(is_sample=True)

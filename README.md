@@ -23,7 +23,8 @@
 ├── agent/      AI 助教设计说明（后端实现见 backend/agent/）
 └── docs/       文档与原型
     ├── requirements/  需求规格说明书（SRS）源码与用户故事地图
-    └── prototype/     墨刀高保真原型（HTML 源文件与预览图）
+    ├── prototype/     墨刀高保真原型（HTML 源文件与预览图）
+    └── project-bundles/  工程题上传、测评协议与教师教程
 ```
 
 ## 技术栈
@@ -42,6 +43,7 @@
 - 需求规格说明书：[docs/requirements/requirements_v2.tex](docs/requirements/requirements_v2.tex)（XeLaTeX + ctex 编译）
 - 用户故事地图：[docs/requirements/storymap.png](docs/requirements/storymap.png)
 - 产品原型说明：[docs/prototype/README.md](docs/prototype/README.md)
+- 工程题上传与测评：[docs/project-bundles/README.md](docs/project-bundles/README.md)
 - 墨刀在线原型：[https://modao.cc/proto/FgnsjqSBtnggwtjPrLH0B5/sharing](https://modao.cc/proto/FgnsjqSBtnggwtjPrLH0B5/sharing)
 
 ## 协作约定

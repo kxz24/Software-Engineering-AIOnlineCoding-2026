@@ -6,22 +6,30 @@ SSE 的传输细节由视图负责；本模块只产出结构化事件：
 """
 import json
 import logging
+import re
 
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Sum
 from django.utils import timezone
+from user.models import AuditLog
 
 from . import tools
-from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level
-from .models import AgentMessage, AgentSession
-from .policy import sanitize_advise_text
+from .guard import GuardError, SCOPE_EXAMPLES, configured_reviewer
+from .harness_scope import (ScopeReviewError, configured_scope_provider,
+                            review_edit_scope)
+from .levels import LEVEL_LABELS, can_edit_code, level_for_exam, tools_for_level, tools_for_turn
+from .models import AgentMessage, AgentSession, AgentToolCall, WorkspaceFile
+from .policy import (asks_for_check_targets_only, extract_scope_targets, localized_request,
+                     scoped_violation, sanitize_scoped_text, single_file_status_request,
+                     trim_unrequested_list_tail, unverified_file_status_claim)
 from .providers import ProviderError, get_provider, provider_info
 
 logger = logging.getLogger(__name__)
 
 MAX_SYSTEM_FILE_CHARS = 12000
 MAX_SYSTEM_SAMPLE_CHARS = 4000
+MAX_SYSTEM_FILE_LIST_CHARS = 12000
 
 
 class AgentError(Exception):
@@ -76,6 +84,13 @@ def get_or_create_session(exam, student, problem):
             "prompt_version": getattr(settings, "AGENT_PROMPT_VERSION", "v1"),
         },
     )
+    if hasattr(problem, "project_bundle"):
+        for path, content in problem.project_bundle.public_files.items():
+            WorkspaceFile.objects.get_or_create(
+                exam=exam, student=student, problem=problem,
+                path=f"p{problem.id}/{path}",
+                defaults={"content": content, "revision": 1},
+            )
     return session
 
 
@@ -96,11 +111,12 @@ def next_seq(session):
     return (last or 0) + 1
 
 
-def add_user_message(session, content):
+def add_user_message(session, content, action="answer"):
     with transaction.atomic():
         return AgentMessage.objects.create(
             session=session, seq=next_seq(session), role=AgentMessage.ROLE_USER,
             content=str(content or "")[:20000],
+            requested_action=action,
         )
 
 
@@ -151,11 +167,21 @@ def _system_prompt(session):
 
     files = list(tools.workspace_files(session))
     file_text = ""
-    for file in files:
-        content = file.content or ""
-        if len(content) > MAX_SYSTEM_FILE_CHARS:
-            content = content[:MAX_SYSTEM_FILE_CHARS] + "\n…（内容已截断）"
-        file_text += f"\n### {file.path}（版本 {file.revision}）\n```\n{content}\n```\n"
+    if hasattr(problem, "project_bundle"):
+        lines = [f"- {file.path}（版本 {file.revision}，{len(file.content or '')} 字符）"
+                 for file in files]
+        for line in lines:
+            if len(file_text) + len(line) + 1 > MAX_SYSTEM_FILE_LIST_CHARS:
+                file_text += "\n…（其余文件请用 list_files 查看）"
+                break
+            file_text += "\n" + line
+        file_text += "\n需要内容时用 read_workspace 按路径读取。"
+    else:
+        for file in files:
+            content = file.content or ""
+            if len(content) > MAX_SYSTEM_FILE_CHARS:
+                content = content[:MAX_SYSTEM_FILE_CHARS] + "\n…（内容已截断）"
+            file_text += f"\n### {file.path}（版本 {file.revision}）\n```\n{content}\n```\n"
     if not file_text:
         file_text = "（工作区还没有文件）"
 
@@ -163,15 +189,45 @@ def _system_prompt(session):
         ability = (
             "你可以直接修改工作区代码：先用 read_workspace 读取文件，再用 write_file "
             "写入完整的新内容；每次写入前确认文件版本，避免覆盖。"
+            "学生无需在问题里声明不要修改或运行；只有明确请求相应行动才可执行。"
         )
     else:
         ability = (
-            "你只能给思路、检查点和调试方向，不能修改工作区。"
-            "禁止输出完整代码、完整函数或完整程序，也不要把答案写成 Markdown 代码块；"
-            "可以用行内短代码提及 API 或表达式名称。"
-            "如果考生要求完整代码，必须明确拒绝，并引导其按思路自己实现。"
+            "你只能用自然语言解释本题思路、检查点和调试方向，不能修改工作区。"
+            "考生无需在问题里写‘只讲概念’或‘不要给代码’；你自己判断所问深度。"
+            "先正面回答当前问题，再停止；回答只需覆盖问题所需的内容，不预测下一问。"
+            "解释新概念时，假设考生可能完全没学过：先用日常语言说清它是什么、为什么有用，"
+            "必要时用一个很小的数字例子解释，再联系本题当前操作。"
+            "让解释足以听懂，但一个例子已经说明时就停止，不主动引入后续数据结构、"
+            "通用更新规则、查询路径或整题做法；只问概念关系时不追加具体语言、"
+            "框架或其他模块的实现细节。"
+            "问算法构思或某步骤的作用时，讲清所问结构的作用和原因，不主动展开实现流程；"
+            "除非学生要求举例，否则不为已有步骤另编数字例子。"
+            "如果只问应关注哪些部分或检查哪些情况，指出这些对象及其重要性即可；"
+            "不要替学生逐一推导各情况的判定结论和完整处理办法。"
+            "说明检查范围时避免把仍可能决定结果的情况排除在外；"
+            "自拟数字例子须和同一例子中列出的数据一致。"
+            "若提问很宽泛，先讲有助于入门的关键原理，再询问具体卡点。"
+            "默认不讲代码具体怎么写；概念或思路问题不要给可照写的赋值式、更新语句、代码块，"
+            "也不要把这类表达式放进反引号中；数字例子用普通文字说明变化。"
+            "只问报错原因或哪里错时，用两三句话指出原因和检查位置即可，"
+            "不附带修复语句，即使放在行内反引号或解释中也不行。"
+            "明确追问指定位置怎么修、怎么改或怎么写时，才可给这一处的短行内示例与必要依赖，"
+            "不附加其他修改或后续步骤，不给完整函数、程序、整题伪代码或连续实现步骤。"
+            "如果泛泛索要完整答案，说明当前模式不能给完整解答，"
+            "只讲相关概念，并请其指出具体卡点。"
             "不要假装已经改过文件。"
         )
+
+    answer_requirement = (
+        "使用中文，先解答再停止；用学生能理解的说法，允许简短的数字例子解释概念。"
+        "回复只覆盖当前提问所需的深度，不能因追求短而省掉关键解释。"
+        if not can_edit_code(session.level) else
+        "使用中文，简洁直接；只在学生明确索要时提供相应范围的代码或修改建议。"
+        "严格遵守提问限定的证据来源：若只问当前文件，就只据当前文件回答，"
+        "只概括可直接观察的内容与是否已有实现；"
+        "不补充题面要求、其他文件、缺少哪些题面部件、后续做法或未经运行验证的结果。"
+    )
 
     return f"""你是 AI Coding 考试平台里的编程助教，正在协助一名考生完成考试题目。
 
@@ -182,6 +238,13 @@ def _system_prompt(session):
 
 【当前级别】{LEVEL_LABELS.get(session.level, session.level)}
 {ability}
+
+【通用边界】先识别学生当前真正请求的是解释、诊断、实现、修改还是运行。
+询问现状、原因或思路不授权你完成任务；不得因为某一步看起来有帮助就主动推进。
+只回答问题所需，任何工具行动须同时满足当前考试级别和本轮授权。
+若只问已有工程文件做了什么，用几句话概括当前代码可观察的结构和作用；
+可以解释学生自己写出的代码，但不要补写实现、预测未运行的结果或追加下一步建议。
+{SCOPE_EXAMPLES}
 
 题目：{problem.title}
 语言：{problem.language}
@@ -194,7 +257,7 @@ def _system_prompt(session):
 
 考生当前工作区：{file_text}
 
-回答要求：使用中文，简洁直接；涉及代码时给出可运行的完整片段或明确的行级修改建议。
+回答要求：{answer_requirement}
 """
 
 
@@ -267,7 +330,91 @@ def _accumulate(totals, usage_event):
     totals["cache_miss"] += int(usage_event.get("cacheMissTokens") or 0)
 
 
-def generate_events(session, provider=None):
+def _open_scope_issue(question, answer):
+    """Catch the clearest unsolicited code dump even if a reviewer misses it."""
+    if (re.search(r"只(?:根据|依据|看|从).{0,10}(?:当前|这个|该)?文件", question)
+            and re.search(r"题面|题目要求|编译|汇编(?:后|产物|结果)|构建|运行后|测试结果", answer)):
+        return ("学生限定只依据当前文件；只保留文件中可直接观察的内容和据此得出的结论，"
+                "删除题目要求、其他来源及未经运行的结果推断。")
+    if unverified_file_status_claim(question, answer):
+        return "学生只问当前内容；删除未经实际执行的编译、运行或测试结果推断。"
+    overview = re.search(r"大致|思路|概念|是什么|含义|作用|为什么|哪些阶段|原理|概览", question)
+    implementation = re.search(r"代码|怎么写|怎么改|实现|命令|运行|修改|修复|完整解", question)
+    if overview and not implementation and "```" in answer:
+        return "学生只问解释或概览；删除未请求的代码块和实现步骤。"
+    return ""
+
+
+def _review_workspace_excerpt(session, question):
+    """Give the reviewer one named public file, never the whole project or hidden files."""
+    if not single_file_status_request(question):
+        return ""
+    matches = []
+    for file in tools.workspace_files(session):
+        basename = file.path.rsplit("/", 1)[-1]
+        if re.search(r"(?<![A-Za-z0-9_.])" + re.escape(basename)
+                     + r"(?![A-Za-z0-9_.])", question):
+            matches.append(file)
+    if len(matches) == 1:
+        file = matches[0]
+        return f"{file.path} (revision {file.revision}):\n{file.content[:6000]}"
+    return ""
+
+
+def _review_open_scope(session, question, content, context, provider, reviewer,
+                       max_tokens, usage_event):
+    totals = _empty_totals()
+    if usage_event:
+        _accumulate(totals, usage_event)
+    attack_evidence = ""
+    for attempt in range(3):
+        try:
+            verdict = reviewer.review(question, content)
+        except GuardError as exc:
+            logger.warning("回答范围审查失败 session=%s: %s", session.id, exc)
+            content = "这次回答未能完成范围审查。请重试当前问题。"
+            break
+        if verdict.get("usage"):
+            _accumulate(totals, verdict["usage"])
+        if verdict.get("user_attack") and verdict.get("attack_evidence"):
+            attack_evidence = verdict["attack_evidence"]
+        issue = _open_scope_issue(question, content)
+        if verdict["allowed"] and not issue:
+            break
+        if attempt == 2:
+            content = "这次回答超出了所问范围。请把当前卡点再具体描述一次。"
+            break
+        feedback = "；".join(part for part in (verdict["feedback"], issue) if part)
+        retry_context = context + [
+            {"role": "assistant", "content": content},
+            {"role": "user", "content": (
+                "只修改上一条回答，不重新求解。审查意见：" + feedback +
+                "。保留准确且切题的部分，删除未请求的代码、步骤和后续建议；"
+                "若学生明确要求代码，则只保留所问位置的代码。输出修改后的完整回答。")},
+        ]
+        revised = []
+        retry_provider = (provider.without_thinking()
+                          if getattr(settings, "AGENT_RETRY_DISABLE_THINKING", True)
+                          and hasattr(provider, "without_thinking") else provider)
+        try:
+            for event in retry_provider.stream(retry_context, [],
+                                               max_tokens=min(max_tokens, 1024)):
+                if event["type"] == "delta":
+                    revised.append(event["text"])
+                elif event["type"] == "usage":
+                    _accumulate(totals, event)
+        except ProviderError as exc:
+            logger.warning("回答范围整改失败 session=%s: %s", session.id, exc)
+            content = "这次回答未能完成范围审查。请重试当前问题。"
+            break
+        content = "".join(revised)
+    return content, {
+        "inputTokens": totals["input"], "outputTokens": totals["output"],
+        "cacheHitTokens": totals["cache_hit"], "cacheMissTokens": totals["cache_miss"],
+    }, attack_evidence
+
+
+def generate_events(session, provider=None, reviewer=None, turn_action="answer"):
     """
     生成一次 AI 回复的事件流（同步生成器）。
 
@@ -281,9 +428,28 @@ def generate_events(session, provider=None):
         return
 
     max_rounds = max(1, int(getattr(settings, "AGENT_MAX_TOOL_ROUNDS", 6)))
+    if turn_action == "answer":
+        max_rounds = min(max_rounds, 3)
     max_tokens = int(getattr(settings, "AGENT_MAX_OUTPUT_TOKENS", 1024))
-    specifications = tools.tool_specs_for(session.level)
+    allowed_tools = set(tools_for_turn(session.level, turn_action))
+    specifications = tools.tool_specs_for(session.level, allowed_tools)
     context = build_messages(session)
+    if turn_action == "answer":
+        context[0]["content"] += (
+            "\n【本轮授权】学生只请求回答问题。可以读取相关材料；"
+            "不要运行程序、修改文件或自行完成后续任务。回答所问后停止。"
+        )
+    elif turn_action == "run":
+        context[0]["content"] += (
+            "\n【本轮授权】学生请求运行验证。可以读取和运行；"
+            "不要修改文件，也不要扩展到未请求的测试或任务。"
+        )
+    else:
+        context[0]["content"] += (
+            "\n【本轮授权】学生允许修改代码。只处理本轮明确提出的范围，"
+            "可以读取文件，但不得运行程序、构建或测试；完成修改后停止，"
+            "不自行推进整题的其他部分。"
+        )
     totals = _empty_totals()
     collected_tool_calls = []
     finish_reason = "stop"
@@ -296,6 +462,38 @@ def generate_events(session, provider=None):
     tool_context = tools.ToolContext(session, emit)
     # 二级会话在服务端过滤完整代码，不能只依赖提示词
     redact_code = not can_edit_code(session.level)
+    scope_guard = (can_edit_code(session.level)
+                   and getattr(settings, "AGENT_SCOPE_GUARD_ENABLED", True))
+    if redact_code and reviewer is None and getattr(settings, "AGENT_GUARD_ENABLED", True):
+        if getattr(settings, "AGENT_PROVIDER", "mock") == "deepseek":
+            reviewer = configured_reviewer()
+            reviewer.problem_context = (session.problem.description or "")[:3000]
+    if scope_guard and reviewer is None and getattr(settings, "AGENT_PROVIDER", "mock") == "deepseek":
+        reviewer = configured_reviewer(scope_only=True)
+        reviewer.problem_context = (session.problem.description or "")[:3000]
+    question = (session.messages.filter(role=AgentMessage.ROLE_USER)
+                .order_by("-seq").values_list("content", flat=True).first() or "")
+    if single_file_status_request(question):
+        context[0]["content"] += (
+            "\n【本轮文件状态问答】请用两到四句中文概括现有代码的结构和作用。"
+            "允许解释学生已写的代码，但不逐行拆解、不建议下一步，"
+            "不声称未经执行的编译或运行结果。"
+        )
+    elif (re.search(r"关系|区别|联系", question)
+          and not re.search(r"举例|例子|具体代码|怎么写", question)):
+        context[0]["content"] += (
+            "\n【本轮概念关系问答】用几句话解释所问概念各指什么、彼此如何关联即可。"
+            "学生没有要求数字例子，不必自拟地址或数值，也不延伸到实现陷阱和其他模块。"
+        )
+    if reviewer is not None and hasattr(reviewer, "workspace_context"):
+        reviewer.workspace_context = _review_workspace_excerpt(session, question)
+    if redact_code and asks_for_check_targets_only(question):
+        context[0]["content"] += (
+            "\n【本轮回答范围】只需列出检查对象。"
+            "不要展开各类的成立条件、判定结果、处理步骤或整题结论；"
+            "检查范围应覆盖所有可能影响结果的情况。"
+        )
+    attack_logged = False
 
     try:
         for _round in range(max_rounds):
@@ -307,7 +505,7 @@ def generate_events(session, provider=None):
             for event in provider.stream(context, specifications, max_tokens=max_tokens):
                 if event["type"] == "delta":
                     text_parts.append(event["text"])
-                    if not redact_code:
+                    if not redact_code and not scope_guard:
                         yield event
                 elif event["type"] == "tool_call":
                     tool_calls.append(event)
@@ -318,7 +516,121 @@ def generate_events(session, provider=None):
 
             content = "".join(text_parts)
             if redact_code:
-                content = sanitize_advise_text(content)
+                # A tool-call round may contain unreviewed commentary. Keep it internal.
+                if tool_calls:
+                    content = ""
+                elif reviewer and content:
+                    # Review exactly what a localized student would see, after
+                    # reducing a single-line fence to that one requested line.
+                    if (localized_request(question) and "```" in content
+                            and not scoped_violation(question, content)):
+                        content = sanitize_scoped_text(content, question)
+                    round_usage = _empty_totals()
+                    if usage_event:
+                        _accumulate(round_usage, usage_event)
+                    reviewed_scope_candidate = ""
+                    for attempt in range(3):
+                        verdict = None
+                        for review_try in range(2):
+                            try:
+                                verdict = reviewer.review(question, content)
+                                break
+                            except GuardError as exc:
+                                logger.warning("审查调用失败 session=%s try=%s: %s",
+                                               session.id, review_try + 1, exc)
+                        if verdict is None:
+                            content = "在当前模式下，我无法确认这条回答符合考试规则。请尝试重新提问思路或调试现象。"
+                            break
+                        if verdict.get("usage"):
+                            _accumulate(round_usage, verdict["usage"])
+                        if (verdict.get("user_attack") and verdict.get("attack_evidence")
+                                and not attack_logged):
+                            AuditLog.objects.create(
+                                user=session.student, action="agent_prompt_attack_suspected",
+                                detail=json.dumps({"sessionId": session.id,
+                                                   "evidence": verdict["attack_evidence"]},
+                                                  ensure_ascii=False),
+                            )
+                            attack_logged = True
+                        local_issue = scoped_violation(question, content)
+                        if verdict["allowed"] and asks_for_check_targets_only(question):
+                            reviewed_scope_candidate = content
+                            names_only = extract_scope_targets(question, content)
+                            if names_only:
+                                content = names_only
+                                local_issue = ""
+                        if verdict["allowed"] and not local_issue:
+                            break
+                        if attempt == 2:
+                            content = (extract_scope_targets(question, reviewed_scope_candidate)
+                                       or "在当前模式下，我无法提供具体代码实现。"
+                                          "你可以询问本题的思路、概念或调试方向。")
+                            break
+                        review_issues = [part for part in (verdict["feedback"], local_issue)
+                                         if part]
+                        correction = "；".join(dict.fromkeys(review_issues))
+                        retry_context = context + [{
+                            "role": "assistant", "content": content,
+                        }, {
+                            "role": "user", "content":
+                            "请修改你刚才的回答，不要重新求解题目。审查发现的问题：" +
+                            correction +
+                            "。保留原回答中准确且切题的解释，删除或改写所有越界内容；"
+                            "输出修改后的完整回答，不解释修改过程。先把问题讲明白，再停止。"
+                            + ("若只问报错原因，不写修复语句；若明确问指定代码行怎么改，"
+                               "只给这一行的短行内示例与必要的依赖提醒，不追加其他步骤。"
+                               if localized_request(question) else
+                               "用通俗语言解释当前卡点；抽象概念可以用一个小数字例子，"
+                               "数字写在正文中，逐一删去上一版的可照写表达式、更新语句和代码块，"
+                               "不要把它们换成反引号中的同义写法，也不要讲整题步骤；"
+                               "若问概念，解释完例子就停，不推进后续算法。"),
+                        }]
+                        revised = []
+                        retry_usage = None
+                        try:
+                            retry_provider = (provider.without_thinking()
+                                              if getattr(settings, "AGENT_RETRY_DISABLE_THINKING", True)
+                                              and hasattr(provider, "without_thinking") else provider)
+                            for retry_event in retry_provider.stream(
+                                    retry_context, [], max_tokens=min(max_tokens, 1024)):
+                                if retry_event["type"] == "delta":
+                                    revised.append(retry_event["text"])
+                                elif retry_event["type"] == "usage":
+                                    retry_usage = retry_event
+                        except ProviderError as exc:
+                            logger.warning("整改生成失败 session=%s: %s", session.id, exc)
+                            content = ("在当前模式下，我无法提供具体代码实现。"
+                                       "你可以询问本题的思路、概念或调试方向。")
+                            break
+                        content = "".join(revised)
+                        if retry_usage:
+                            _accumulate(round_usage, retry_usage)
+                    usage_event = {
+                        "inputTokens": round_usage["input"],
+                        "outputTokens": round_usage["output"],
+                        "cacheHitTokens": round_usage["cache_hit"],
+                        "cacheMissTokens": round_usage["cache_miss"],
+                    }
+                content = sanitize_scoped_text(content, question)
+                content = trim_unrequested_list_tail(question, content)
+                if attack_logged and not tool_calls and content:
+                    content += "\n\n当前请求包含试图改变考试 AI 规则的内容，相关对话已记录。"
+                if content:
+                    yield {"type": "delta", "text": content}
+            elif scope_guard:
+                if tool_calls:
+                    content = ""
+                elif reviewer and content:
+                    content, usage_event, attack_evidence = _review_open_scope(
+                        session, question, content, context, provider, reviewer,
+                        max_tokens, usage_event)
+                    if attack_evidence and not attack_logged:
+                        AuditLog.objects.create(
+                            user=session.student, action="agent_prompt_attack_suspected",
+                            detail=json.dumps({"sessionId": session.id,
+                                               "evidence": attack_evidence}, ensure_ascii=False),
+                        )
+                        attack_logged = True
                 if content:
                     yield {"type": "delta", "text": content}
             assistant_calls = _assistant_tool_calls(tool_calls)
@@ -351,10 +663,50 @@ def generate_events(session, provider=None):
                     "name": call["name"],
                     "arguments": call.get("arguments") or {},
                 }
-                ok, result = tools.execute_tool(
-                    call["name"], call.get("arguments") or {}, tool_context,
-                    session, call_id=call["id"],
-                )
+                arguments = call.get("arguments") or {}
+                edit_review = (call["name"] == "write_file"
+                               and "write_file" in allowed_tools
+                               and scope_guard
+                               and getattr(settings, "AGENT_PROVIDER", "mock") == "deepseek"
+                               and isinstance(arguments.get("path"), str)
+                               and isinstance(arguments.get("content"), str))
+                if edit_review:
+                    path = arguments["path"]
+                    current = WorkspaceFile.objects.filter(
+                        exam=session.exam, student=session.student,
+                        problem=session.problem, path=path).first()
+                    snapshot = {path: ((current.content, current.revision)
+                                       if current else ("", 0))}
+                    try:
+                        approved, feedback, review_usage = review_edit_scope(
+                            question, {path: arguments["content"]}, snapshot,
+                            configured_scope_provider())
+                        _add_usage(session, {
+                            "input": review_usage["inputTokens"],
+                            "output": review_usage["outputTokens"],
+                            "cache_hit": review_usage["cacheHitTokens"],
+                            "cache_miss": review_usage["cacheMissTokens"],
+                        })
+                    except ScopeReviewError as exc:
+                        approved, feedback = False, str(exc)
+                    AgentToolCall.objects.create(
+                        session=session, call_id=f"review-{call['id']}"[:64],
+                        name="write_file_scope_review", arguments={"path": path},
+                        ok=approved, result_excerpt=feedback[:500],
+                    )
+                    if not approved:
+                        ok = False
+                        result = json.dumps({"ok": False, "error":
+                                             "本轮请求未授权这项修改：" + feedback},
+                                            ensure_ascii=False)
+                    else:
+                        ok, result = tools.execute_tool(
+                            call["name"], arguments, tool_context, session,
+                            call_id=call["id"], allowed_tools=allowed_tools)
+                else:
+                    ok, result = tools.execute_tool(
+                        call["name"], arguments, tool_context, session,
+                        call_id=call["id"], allowed_tools=allowed_tools)
                 _add_message(
                     session, AgentMessage.ROLE_TOOL, content=result,
                     tool_call_id=call["id"], name=call["name"],
