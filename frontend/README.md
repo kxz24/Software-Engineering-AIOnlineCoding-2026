@@ -48,7 +48,8 @@ src/
 ├── pages/         页面
 │   ├── LoginPage.tsx
 │   ├── RegisterPage.tsx
-│   ├── student/   02 我的考试、03 考试须知、04 做题工作台、05 提交结果、06 成绩报告（+ /reports 报告列表）
+│   ├── student/   02 我的考试、03 考试须知、04 做题工作台、05 提交结果、06 成绩报告、
+│   │               自由练习（练习列表 / 练习页）
 │   └── teacher/   07 考试管理、08 创建考试、09 题目配置、10 监考中心（+ /manage/proctor 选考页）、题库管理、账号管理
 ├── styles/        prototype.css（设计系统）、workbench.css（工作台，作用域 .wb-root）、app.css（布局自适应）
 ├── roles.ts       角色定义与角色首页
@@ -67,6 +68,8 @@ src/
 | 05 提交结果 | `/exams/:examId/result` | 学生 |
 | 06 成绩报告 | `/exams/:examId/report` | 学生 |
 | 06 报告列表 | `/reports` | 学生 |
+| 自由练习 | `/practice` | 学生 |
+| 自由练习页 | `/practice/:problemId` | 学生 |
 | 07 考试管理 | `/manage` | 教师 / 管理员 |
 | 08 创建考试 | `/manage/new` | 教师 / 管理员 |
 | 08 编辑考试 | `/manage/:examId/edit` | 教师 / 管理员 |
@@ -126,13 +129,18 @@ src/
 | `/api/v1/exams/:id/submissions` | GET | 本场考试提交记录（`problemId` 过滤），教师 / 管理员 |
 | `/api/v1/my/exams` | GET | 我的考试列表，学生 |
 | `/api/v1/my/exams/:id` | GET | 考试详情：题面 + 样例 + 初始代码（无隐藏测试），学生 |
-| `/api/v1/my/exams/:id/problems/:pid/submissions` | GET / POST | 某题提交历史（含代码）/ 提交答卷（只收卷，按题限次），学生 |
+| `/api/v1/my/exams/:id/problems/:pid/submissions` | GET / POST | 某题提交历史（含代码）/ 提交答卷（异步判题），学生 |
+| `/api/v1/practice/problems` | GET | 开放自由练习的算法题列表，学生 |
+| `/api/v1/practice/problems/:id` | GET | 练习题目详情（题面 / 公开样例 / 初始代码） |
+| `/api/v1/practice/problems/:id/submissions` | GET / POST | 练习提交历史 / 提交判题 |
+| `/api/v1/practice/submissions/:id` | GET | 单次练习判题结果 |
+| `/api/v1/practice/problems/:id/comments` | GET / POST | 题目评论区（可附代码、可用 parentId 回复） |
+| `/api/v1/practice/comments/:id` | DELETE | 删除自己的评论（教师 / 管理员可删任意；顶层删除会级联回复） |
 
 令牌保存在 `localStorage`，请求时原样放在 `Authorization` 头里（不带 `Bearer` 前缀）。
 除认证外的入口（账号、导入、审计、题库、考试）统一走 `client.ts` 的 `request()`，
 非 2xx 抛 `ApiError`，页面 catch 后展示错误与重试。
-仍使用演示数据的部分：工作台的终端页签（`src/mock/workbench.ts`）；Agent 会话已接真实接口。提交结果（05）、成绩报告（06）、监考中心（10）
-均为真实提交记录数据，评测服务接入前不展示分数（统一显示「待判定」）。
+仍使用演示数据的部分：工作台的终端页签（`src/mock/workbench.ts`）；Agent 会话、判题结果、自由练习与评论区均已接真实接口。
 
 ## 后续工作
 

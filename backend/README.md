@@ -18,7 +18,7 @@ cd backend
 #建议使用conda
 pip install -r requirements.txt
 
-python manage.py makemigrations user problem exam agent   # 迁移文件被 .gitignore 忽略，需各自本地生成
+python manage.py makemigrations user problem exam agent practice   # 迁移文件被 .gitignore 忽略，需各自本地生成
 python manage.py migrate
 python manage.py runserver 127.0.0.1:8000
 ```
@@ -45,6 +45,7 @@ python manage.py shell -c "from user.models import User; from utils.jwt import e
 ├── problem/       题库：题目与测试样例 CRUD
 ├── exam/          考场：考试管理（创建 / 组卷 / 名单 / 发布 / 撤回 / 归档）与学生作答闭环
 ├── agent/         AI 助教：分级会话、SSE 对话、工具调用与用量记录
+├── practice/     自由练习：练习提交、判题任务与题目评论区
 ├── utils/         jwt.py（令牌 + login_required / role_required 装饰器）
 ├── nginx/         生产环境反向代理配置
 ├── docker-compose.yml / Dockerfile / Makefile
@@ -79,6 +80,12 @@ python manage.py shell -c "from user.models import User; from utils.jwt import e
 | `/api/v1/my/exams/:id/submissions` | GET | 学生 | 我在本场考试的提交记录 |
 | `/api/v1/my/exams/:id/problems/:pid/submissions` | GET / POST | 学生 | 某题提交历史（含代码）/ 提交答卷（发布时段内、按题限次，异步判题） |
 | `/api/v1/submissions/:id` | GET | 本人 / 教师 / 管理员 | 单条提交详情、得分与用例判定（隐藏用例不返回输入/期望/输出） |
+| `/api/v1/practice/problems` | GET | 学生 | 开放自由练习的算法题列表 |
+| `/api/v1/practice/problems/:id` | GET | 学生 | 题面 + 公开样例 + 初始代码（隐藏用例不下发） |
+| `/api/v1/practice/problems/:id/submissions` | GET / POST | 学生 | 我的练习提交历史 / 提交代码（异步判题） |
+| `/api/v1/practice/submissions/:id` | GET | 本人 | 单次练习提交的状态与逐用例结果 |
+| `/api/v1/practice/problems/:id/comments` | GET / POST | 已登录 | 题目评论区：列表 / 发布（可附带代码、用 `parentId` 回复） |
+| `/api/v1/practice/comments/:id` | DELETE | 作者 / 教师 / 管理员 | 删除评论（回复一并删除） |
 | `/api/v1/agent/capabilities` | GET | 学生 | 本场考试的 AI 级别、可用工具与剩余额度（`closed` 返回 403） |
 | `/api/v1/agent/sessions` | POST | 学生 | 创建或取回某题会话（每场考试每题一个） |
 | `/api/v1/agent/sessions/:id/messages` | GET / POST | 学生 | 对话历史 / 发消息（SSE：delta、tool_call、change、usage、done） |
@@ -120,6 +127,17 @@ python manage.py shell -c "from user.models import User; from utils.jwt import e
   异步判题回填 verdict / score / 通过数 / 耗时 / 内存 / 编译输出 / 需人工复核等字段。
 - `exam.SubmissionCase`：单用例判定结果（样例名、是否样例、verdict、耗时、内存、摘要）；
   隐藏用例不保存实际输出与错误信息。
+- `practice.PracticeSubmission`：自由练习提交（与考试提交独立），状态 / verdict / 通过数与逐用例结果。
+- `practice.ProblemComment`：题目评论（作者、内容、可选附带代码与语言）。
+
+## 自由练习
+
+教师可在题库中勾选「开放自由练习」，学生端「自由练习」页只展示 `practice_enabled=True` 的算法题。
+练习提交走与考试相同的 Docker 沙箱和 Celery 队列，但使用独立的 `PracticeSubmission`，
+不占用考试次数、不计入成绩；结果接口对隐藏用例只返回判定与耗时，不含输入输出。
+
+每道练习题有评论区，学生可以讨论思路并附带代码，也可以回复其他评论（两级展示，回复的回复归到顶层）。
+评论按时间倒序返回，作者可删除自己的评论，教师 / 管理员可删除任意评论；删除顶层评论会一并删除回复。
 
 ## 判题（Celery + Redis + Docker）
 
@@ -174,7 +192,7 @@ python manage.py judge_requeue
 ## 测试
 
 ```bash
-python manage.py test user problem exam judge agent   # 含判题与 AI 助教的分级、SSE、工具权限测试
+python manage.py test user problem exam judge agent practice   # 含判题、AI 助教与自由练习测试
 python manage.py test judge                     # 仅判题相关
 manage.py check
 ```
@@ -206,7 +224,7 @@ docker compose up -d --build
 ## 约定
 
 - 迁移文件（`**/migrations/*.py`）与 `db.sqlite3` 被 .gitignore 忽略（课程模板约定），
-  拉取代码后先 `makemigrations user problem exam agent` 再 `migrate`。
+  拉取代码后先 `makemigrations user problem exam agent practice` 再 `migrate`。
 - 接口返回 JSON 的键用 camelCase（`userId`、`sampleCount`、`isSample`…），
   与前端 TypeScript 类型一一对应。
 - 新增接口时：先在应用 `controllers.py` 写业务函数，`views.py` 只做校验与响应组装，
