@@ -74,6 +74,7 @@ INSTALLED_APPS = [
     "exam",
     "judge",
     "agent",
+    "practice",
     "rest_framework",
     "drf_spectacular",
     'drf_spectacular_sidecar',

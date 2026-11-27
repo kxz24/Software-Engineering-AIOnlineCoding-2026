@@ -43,6 +43,7 @@ def problem_summary(problem):
         "timeLimitMs": problem.time_limit_ms,
         "memoryLimitMb": problem.memory_limit_mb,
         "outputLimitKb": problem.output_limit_kb,
+        "practiceEnabled": problem.practice_enabled,
         "sampleCount": problem.samples.filter(is_sample=True).count(),
         "hiddenCount": problem.samples.filter(is_sample=False).count(),
         "updated": problem.updated,

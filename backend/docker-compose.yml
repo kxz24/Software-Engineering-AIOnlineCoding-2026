@@ -62,7 +62,7 @@ services:
     # 因此必须先 makemigrations 才能建表
     command: >
       bash -c "export DJANGO_SETTINGS_MODULE=app.settings_prod &&
-      python manage.py makemigrations app user problem exam agent &&
+      python manage.py makemigrations app user problem exam agent practice &&
       python manage.py migrate &&
       exec gunicorn -w4 -b 0.0.0.0:8000 --timeout 300 --log-level=debug app.wsgi"
     expose:

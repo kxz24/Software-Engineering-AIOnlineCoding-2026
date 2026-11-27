@@ -67,6 +67,8 @@ class Problem(models.Model):
     time_limit_ms = models.PositiveIntegerField(default=2000, verbose_name="单用例时限（毫秒）")
     memory_limit_mb = models.PositiveIntegerField(default=256, verbose_name="内存上限（MB）")
     output_limit_kb = models.PositiveIntegerField(default=1024, verbose_name="输出上限（KB）")
+    # 是否开放给学生在「自由练习」中作答（部分题目开放，不要求全部）
+    practice_enabled = models.BooleanField(default=True, verbose_name="开放自由练习")
     created_by = models.ForeignKey(
         User,
         null=True,

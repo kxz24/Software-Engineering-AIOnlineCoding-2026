@@ -34,6 +34,14 @@ def _validate_fields(content, partial=False):
         if len(image) > 128:
             return None, "依赖镜像名过长"
         fields["image"] = image
+    if has("practiceEnabled"):
+        value = content.get("practiceEnabled")
+        if isinstance(value, bool):
+            fields["practice_enabled"] = value
+        elif isinstance(value, str) and value.lower() in ("1", "true", "yes", "0", "false", "no"):
+            fields["practice_enabled"] = value.lower() in ("1", "true", "yes")
+        else:
+            return None, "practiceEnabled 需为布尔值"
 
     # 判题资源限制：camelCase 入参 → 模型字段
     limit_fields = [
@@ -162,6 +170,7 @@ class ProblemListView(APIView):
                     "difficulty": {"type": "string", "description": "easy / medium / hard"},
                     "starterCode": {"type": "string", "description": "初始代码"},
                     "image": {"type": "string", "description": "依赖镜像"},
+                    "practiceEnabled": {"type": "boolean", "description": "是否开放自由练习"},
                     "timeLimitMs": {"type": "integer", "description": "单用例时限（毫秒）"},
                     "memoryLimitMb": {"type": "integer", "description": "内存上限（MB）"},
                     "outputLimitKb": {"type": "integer", "description": "输出上限（KB）"},
@@ -245,6 +254,7 @@ class ProblemDetailView(APIView):
                     "difficulty": {"type": "string"},
                     "starterCode": {"type": "string"},
                     "image": {"type": "string"},
+                    "practiceEnabled": {"type": "boolean"},
                     "timeLimitMs": {"type": "integer"},
                     "memoryLimitMb": {"type": "integer"},
                     "outputLimitKb": {"type": "integer"},
