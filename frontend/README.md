@@ -68,6 +68,7 @@ src/
 | 05 提交结果 | `/exams/:examId/result` | 学生 |
 | 06 成绩报告 | `/exams/:examId/report` | 学生 |
 | 06 报告列表 | `/reports` | 学生 |
+| 个人中心 | `/account` | 学生 / 教师 / 管理员 |
 | 自由练习 | `/practice` | 学生 |
 | 自由练习页 | `/practice/:problemId` | 学生 |
 | 07 考试管理 | `/manage` | 教师 / 管理员 |
@@ -115,6 +116,8 @@ src/
 | `/api/v1/login` | PATCH | 登录，返回 JWT 与角色 |
 | `/api/v1/logout` | PATCH | 登出（无状态，仅清本地令牌） |
 | `/api/v1/user` | GET | 当前登录用户信息 |
+| `/api/v1/profile` | GET / PATCH | 个人中心资料、使用概况与本人操作记录 / 修改资料 |
+| `/api/v1/profile/password` | PATCH | 修改密码（校验原密码） |
 | `/api/v1/users` | GET / POST | 账号列表（角色 / 关键字筛选）、创建账号，仅管理员 |
 | `/api/v1/users/import` | POST | CSV 批量导入（每行「账号,姓名[,角色][,邮箱]」，初始密码为账号），仅管理员 |
 | `/api/v1/users/:id` | GET / PATCH | 编辑账号（姓名 / 角色 / 邮箱 / 重置密码），仅管理员 |

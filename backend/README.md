@@ -63,6 +63,8 @@ python manage.py shell -c "from user.models import User; from utils.jwt import e
 | `/api/v1/login` | PATCH | — | 登录，返回 JWT 与角色 |
 | `/api/v1/logout` | PATCH | 已登录 | 登出（无状态，无操作） |
 | `/api/v1/user` | GET | 已登录 | 当前登录用户信息 |
+| `/api/v1/profile` | GET / PATCH | 已登录 | 个人中心：账号状态、使用概况、本人操作记录 / 修改姓名与邮箱 |
+| `/api/v1/profile/password` | PATCH | 已登录 | 修改密码（校验原密码，新密码 6-64 位） |
 | `/api/v1/users` | GET / POST | 管理员 | 账号列表（`role` / `keyword` 筛选）、创建账号 |
 | `/api/v1/users/import` | POST | 管理员 | CSV 批量导入，逐行返回明细 |
 | `/api/v1/users/:id` | GET / PATCH | 管理员 | 编辑账号（姓名 / 角色 / 邮箱 / 重置密码） |
