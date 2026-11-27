@@ -161,3 +161,37 @@ input::placeholder {
 .fade-in {
   animation: fade-in .18s ease-out;
 }
+
+/* ---------- 自由练习 ---------- */
+.practice-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    gap: 14px;
+    align-items: start;
+}
+
+@media (max-width: 1100px) {
+    .practice-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.practice-editor {
+    position: relative;
+    border-top: 1px solid #eef2f7;
+    border-bottom: 1px solid #eef2f7;
+    overflow: hidden;
+}
+
+.practice-editor .code-editor-host {
+    position: relative;
+    height: 100%;
+    min-height: 240px;
+}
+
+.practice-editor .code-editor-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #94a3b8;
+    font-size: 11.5px;
+}
