@@ -4,6 +4,7 @@ import { useSelector } from "react-redux";
 import { StudentLayout } from "../../layouts/StudentLayout";
 import { Icon } from "../../components/Icon";
 import { CodeEditor } from "../../components/CodeEditor";
+import { MarkdownText } from "../../components/MarkdownText";
 import { toast } from "../../components/Toast";
 import { Store } from "../../store";
 import { Routes } from "../../api/urls";
@@ -328,8 +329,8 @@ export function PracticePage() {
                         <span className="badge blue">练习不计分</span>
                     </div>
                     <div className="card-body">
-                        <div style={{ whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.7, color: "#475569" }}>
-                            {problem.description || "（本题没有题面）"}
+                        <div className="md-body" style={{ fontSize: 12, lineHeight: 1.7, color: "#475569" }}>
+                            <MarkdownText text={problem.description || "（本题没有题面）"}/>
                         </div>
                         <div className="card-head" style={{ padding: "14px 0 8px" }}>
                             <div className="card-title" style={{ fontSize: 12.5 }}>公开样例</div>

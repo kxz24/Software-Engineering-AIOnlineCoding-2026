@@ -195,3 +195,14 @@ input::placeholder {
     color: #94a3b8;
     font-size: 11.5px;
 }
+
+/* ---------- Markdown 题面 ---------- */
+.md-body code {
+    font-family: "SFMono-Regular", Consolas, Menlo, monospace;
+    font-size: 11px;
+    background: #f1f5f9;
+    color: #334155;
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+.md-body strong { color: #334155; }

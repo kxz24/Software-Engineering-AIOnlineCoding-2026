@@ -3,6 +3,7 @@ import { Link, useHistory, useParams } from "react-router-dom";
 import { useSelector } from "react-redux";
 import { Icon } from "../../components/Icon";
 import { CodeEditor, LanguageOptions, languageForPath } from "../../components/CodeEditor";
+import { MarkdownText } from "../../components/MarkdownText";
 import { toast } from "../../components/Toast";
 import { Routes } from "../../api/urls";
 import { formatCountdown, secondsUntil } from "../../api/format";
@@ -912,9 +913,9 @@ export function WorkbenchPage() {
                                             <span className="badge blue">{problem.score} 分</span>
                                         </div>
                                     </div>
-                                    <p className="problem-desc" style={{ whiteSpace: "pre-wrap" }}>
-                                        {renderInlineCode(problem.description || "（本题没有题面描述）")}
-                                    </p>
+                                    <div className="problem-desc">
+                                        <MarkdownText text={problem.description || "（本题没有题面描述）"}/>
+                                    </div>
                                     <div className="ai-note">
                                         <Icon name="sparkles" size={13}/>
                                         <span>
