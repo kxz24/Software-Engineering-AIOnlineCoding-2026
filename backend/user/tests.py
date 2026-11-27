@@ -336,3 +336,101 @@ class AccountAdminAPITestCase(TestCase):
 
         # 审计记录真实落库
         self.assertTrue(AuditLog.objects.filter(action="account.create").exists())
+
+
+class ProfileAPITestCase(TestCase):
+    """个人中心：查看资料、本人修改资料与密码。"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.student = User.objects.create(
+            username="2023012345", password=encrypt_password("secret6"),
+            nickname="李同学", role=User.ROLE_STUDENT, email="li@example.com",
+        )
+        self.other = User.objects.create(
+            username="2023019999", password=encrypt_password("secret6"),
+            nickname="王同学", role=User.ROLE_STUDENT,
+        )
+        self.token = self.login("2023012345")
+        self.auth()
+
+    def login(self, username, password="secret6"):
+        resp = self.client.patch(
+            "/api/v1/login", {"username": username, "password": password}, format="json"
+        )
+        return resp.json().get("jwt")
+
+    def auth(self, token=None):
+        self.client.credentials(HTTP_AUTHORIZATION=token or self.token)
+
+    def test_profile_get(self):
+        resp = self.client.get("/api/v1/profile")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["username"], "2023012345")
+        self.assertEqual(body["role"], "student")
+        self.assertEqual(body["status"], "active")
+        self.assertIn("examSubmissions", body["stats"])
+        self.assertIn("audits", body)
+
+    def test_update_self(self):
+        resp = self.client.patch(
+            "/api/v1/profile",
+            {"nickname": "李同学（新）", "email": "new@example.com"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.nickname, "李同学（新）")
+        self.assertEqual(self.student.email, "new@example.com")
+        self.assertTrue(AuditLog.objects.filter(
+            user=self.student, action="account.update_self"
+        ).exists())
+
+    def test_update_self_rejects_bad_email(self):
+        resp = self.client.patch(
+            "/api/v1/profile", {"email": "not-an-email"}, format="json"
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_change_password(self):
+        resp = self.client.patch(
+            "/api/v1/profile/password",
+            {"oldPassword": "secret6", "newPassword": "newpass8"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.password, encrypt_password("newpass8"))
+
+        # 新密码可以登录，旧密码失效
+        self.auth()
+        self.assertEqual(self.client.patch(
+            "/api/v1/login",
+            {"username": "2023012345", "password": "secret6"}, format="json",
+        ).status_code, 401)
+        self.assertEqual(self.client.patch(
+            "/api/v1/login",
+            {"username": "2023012345", "password": "newpass8"}, format="json",
+        ).status_code, 200)
+
+    def test_change_password_validation(self):
+        self.auth()
+        resp = self.client.patch(
+            "/api/v1/profile/password",
+            {"oldPassword": "wrong", "newPassword": "newpass8"}, format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        resp = self.client.patch(
+            "/api/v1/profile/password",
+            {"oldPassword": "secret6", "newPassword": "123"}, format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_profile_requires_login(self):
+        self.client.credentials()
+        self.assertEqual(self.client.get("/api/v1/profile").status_code, 401)
+        self.assertEqual(
+            self.client.patch("/api/v1/profile/password", {}, format="json").status_code,
+            401,
+        )

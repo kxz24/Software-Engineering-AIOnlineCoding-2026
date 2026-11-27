@@ -121,3 +121,99 @@ def get_user_with_pass(username, password):
     except Exception as e:
         print(e)
         return "errors", False
+
+
+# ---------------------------------------------------------------------------
+# 个人中心（登录用户自助）
+# ---------------------------------------------------------------------------
+def user_audit_logs(user, limit=20):
+    """当前用户自己的最近操作记录。"""
+    return (
+        AuditLog.objects.filter(user=user)
+        .order_by("-created", "-id")[: max(1, min(limit, 100))]
+    )
+
+
+def profile_stats(user):
+    """按角色给出个人中心里的账号使用概况。"""
+    from agent.models import AgentSession
+    from exam.models import Exam, Submission
+    from practice.models import PracticeSubmission
+    from problem.models import Problem
+
+    if user.role == User.ROLE_STUDENT:
+        return {
+            "examSubmissions": Submission.objects.filter(student=user).count(),
+            "practiceSubmissions": PracticeSubmission.objects.filter(student=user).count(),
+            "aiSessions": AgentSession.objects.filter(student=user).count(),
+        }
+    if user.role == User.ROLE_TEACHER:
+        return {
+            "createdExams": Exam.objects.filter(created_by=user).count(),
+            "publishedExams": Exam.objects.filter(
+                created_by=user, status=Exam.STATUS_PUBLISHED
+            ).count(),
+            "createdProblems": Problem.objects.filter(created_by=user).count(),
+        }
+    return {
+        "users": User.objects.count(),
+        "auditLogs": AuditLog.objects.count(),
+    }
+
+
+def profile_payload(user):
+    stats = profile_stats(user)
+    audits = [
+        {
+            "action": item.action,
+            "detail": item.detail,
+            "created": item.created.isoformat() if item.created else None,
+        }
+        for item in user_audit_logs(user)
+    ]
+    return {
+        "id": user.id,
+        "username": user.username,
+        "nickname": user.nickname,
+        "email": user.email,
+        "role": user.role,
+        "status": "active",
+        "created": user.created.isoformat() if user.created else None,
+        "updated": user.updated.isoformat() if user.updated else None,
+        "stats": stats,
+        "audits": audits,
+    }
+
+
+def update_self(user, nickname=None, email=None):
+    """本人修改姓名 / 邮箱；不做角色与密码变更（密码走独立接口）。"""
+    if nickname is not None:
+        nickname = str(nickname).strip()
+        if not nickname or len(nickname) > 255:
+            return "姓名不能为空且不超过 255 个字符", False
+        user.nickname = nickname
+    if email is not None:
+        email = str(email).strip()
+        if len(email) > 255:
+            return "邮箱过长", False
+        if email and ("@" not in email or "." not in email.split("@")[-1]):
+            return "邮箱格式不正确", False
+        user.email = email
+    user.save(update_fields=["nickname", "email", "updated"])
+    return user, True
+
+
+def change_password(user, old_password, new_password):
+    """校验原密码后修改密码；密码散列依赖 utils.jwt，延迟导入避免循环依赖。"""
+    from utils.jwt import encrypt_password
+
+    if not 6 <= len(str(new_password)) <= 64:
+        return "新密码长度需在 6-64 个字符之间", False
+    matched = User.objects.filter(
+        id=user.id, password=encrypt_password(str(old_password))
+    ).first()
+    if matched is None:
+        return "原密码不正确", False
+    user.password = encrypt_password(str(new_password))
+    user.save(update_fields=["password", "updated"])
+    return user, True

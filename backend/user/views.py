@@ -10,12 +10,15 @@ from rest_framework.views import APIView
 from utils.jwt import encrypt_password, generate_jwt, login_required, role_required
 
 from .controllers import (
+    change_password,
     create_user,
     get_user,
     get_user_with_pass,
     list_users,
+    profile_payload,
     recent_audit_logs,
     record_audit,
+    update_self,
     update_user,
 )
 from .models import User
@@ -301,6 +304,48 @@ def logout(request):
     当前为无状态 JWT，服务端不维护会话，由前端清除 token 即可
     """
     return Response({"message": "ok"}, status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# 个人中心（任意登录用户）
+# ---------------------------------------------------------------------------
+class ProfileView(APIView):
+    """当前登录用户的账号信息、使用概况与本人操作记录。"""
+
+    @login_required
+    def get(self, request, *args, **kwargs):
+        return Response(profile_payload(request.user), status=status.HTTP_200_OK)
+
+    @login_required
+    def patch(self, request, *args, **kwargs):
+        content = request.data or {}
+        user, ok = update_self(
+            request.user,
+            nickname=content.get("nickname") if "nickname" in content else None,
+            email=content.get("email") if "email" in content else None,
+        )
+        if not ok:
+            return Response({"message": user}, status=status.HTTP_400_BAD_REQUEST)
+        record_audit(user, "account.update_self", "本人修改个人资料")
+        return Response(profile_payload(user), status=status.HTTP_200_OK)
+
+
+class ProfilePasswordView(APIView):
+    """修改密码：必须校验原密码。"""
+
+    @login_required
+    def patch(self, request, *args, **kwargs):
+        content = request.data or {}
+        old_password = str(content.get("oldPassword") or "")
+        new_password = str(content.get("newPassword") or "")
+        if not old_password or not new_password:
+            return Response({"message": "原密码与新密码均不能为空"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        user, ok = change_password(request.user, old_password, new_password)
+        if not ok:
+            return Response({"message": user}, status=status.HTTP_400_BAD_REQUEST)
+        record_audit(user, "account.password", "本人修改密码")
+        return Response({"message": "密码已修改"}, status=status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------
