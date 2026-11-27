@@ -167,6 +167,50 @@ export function isAuthenticated(): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// 个人中心（任意登录用户）
+// ---------------------------------------------------------------------------
+
+export interface ProfileAudit {
+    action: string;
+    detail: string;
+    created: string | null;
+}
+
+export interface ProfileInfo {
+    id: number;
+    username: string;
+    nickname: string;
+    email: string;
+    role: Role;
+    status: string;
+    created: string | null;
+    updated: string | null;
+    stats: Record<string, number>;
+    audits: ProfileAudit[];
+}
+
+export function fetchProfile(): Promise<ProfileInfo> {
+    return request(Urls.profile);
+}
+
+export function updateProfile(payload: {
+    nickname?: string;
+    email?: string;
+}): Promise<ProfileInfo> {
+    return request(Urls.profile, { method: "PATCH", body: payload });
+}
+
+export function changePassword(
+    oldPassword: string,
+    newPassword: string
+): Promise<{ message: string }> {
+    return request(Urls.profilePassword, {
+        method: "PATCH",
+        body: { oldPassword, newPassword },
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 账号管理与题库（管理端 CRUD）。
 // 与登录类的「联合类型返回」不同，这里统一抛 ApiError，由页面 catch 后提示，
 // 避免每个接口都写一遍 success 判别。

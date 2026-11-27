@@ -51,6 +51,9 @@ export function TeacherLayout({ breadcrumb, children }: Props) {
                     <NavLink to={Routes.proctorHome} className="side-link" activeClassName="active">
                         <Icon name="monitor" size={16}/>监考中心
                     </NavLink>
+                    <NavLink to={Routes.account} className="side-link" activeClassName="active">
+                        <Icon name="settings" size={16}/>个人中心
+                    </NavLink>
                     {user?.role === "admin" && (
                         <>
                             <div className="side-label">配置</div>

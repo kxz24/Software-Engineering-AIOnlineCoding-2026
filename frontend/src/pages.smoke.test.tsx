@@ -15,6 +15,7 @@ import { ReportPage } from "./pages/student/ReportPage";
 import { ReportsPage } from "./pages/student/ReportsPage";
 import { PracticeListPage } from "./pages/student/PracticeListPage";
 import { PracticePage } from "./pages/student/PracticePage";
+import { AccountPage } from "./pages/AccountPage";
 import { ExamManagePage } from "./pages/teacher/ExamManagePage";
 import { ExamCreatePage } from "./pages/teacher/ExamCreatePage";
 import { ProblemConfigPage } from "./pages/teacher/ProblemConfigPage";
@@ -34,6 +35,7 @@ const Pages: { name: string; path: string; component: React.ComponentType<any> }
     { name: "reports", path: "/reports", component: ReportsPage },
     { name: "practice-list", path: "/practice", component: PracticeListPage },
     { name: "practice", path: "/practice/:problemId", component: PracticePage },
+    { name: "account", path: "/account", component: AccountPage },
     { name: "manage", path: "/manage", component: ExamManagePage },
     { name: "create", path: "/manage/new", component: ExamCreatePage },
     { name: "problems", path: "/manage/:examId/problems", component: ProblemConfigPage },

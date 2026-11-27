@@ -10,7 +10,7 @@ import { roleLabel } from "../roles";
 import { logout, removeToken } from "../api/client";
 
 /** 学生端的一级入口，对应原型的顶部导航（考试须知随「进入考试」流程进入） */
-export type StudentNav = "exams" | "reports" | "precheck" | "practice";
+export type StudentNav = "exams" | "reports" | "precheck" | "practice" | "account";
 
 interface Props {
     active: StudentNav;
@@ -29,6 +29,7 @@ export function StudentLayout({ active, children }: Props) {
         { key: "exams", label: "我的考试", to: Routes.examList },
         { key: "reports", label: "成绩报告", to: Routes.reports },
         { key: "practice", label: "自由练习", to: Routes.practice },
+        { key: "account", label: "个人中心", to: Routes.account },
     ];
 
     /** 退出登录：后端无状态，清掉本地令牌即可；后端未启动时也要能退出 */

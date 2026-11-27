@@ -8,6 +8,8 @@ export const Urls = {
     login: "/api/v1/login", // PATCH
     logout: "/api/v1/logout", // PATCH
     user: "/api/v1/user", // GET
+    profile: "/api/v1/profile", // GET / PATCH 个人中心
+    profilePassword: "/api/v1/profile/password", // PATCH 修改密码
 
     users: "/api/v1/users", // GET 管理员列表 / POST 创建
     usersImport: "/api/v1/users/import", // POST 批量导入
@@ -53,6 +55,8 @@ export const Routes = {
     examReport: (examId: string | number) => `/exams/${examId}/report`,
     /** 成绩报告首页：列出可查看报告的考试 */
     reports: "/reports",
+    /** 个人中心（学生 / 教师 / 管理员） */
+    account: "/account",
     /** 学生端自由练习 */
     practice: "/practice",
     practiceProblem: (problemId: string | number) => `/practice/${problemId}`,
