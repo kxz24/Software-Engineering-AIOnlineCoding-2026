@@ -4,6 +4,8 @@ import { useSelector } from "react-redux";
 import { Icon } from "../../components/Icon";
 import { CodeEditor, LanguageOptions, languageForPath } from "../../components/CodeEditor";
 import { MarkdownText } from "../../components/MarkdownText";
+import { ProjectWorkspaceActions, ProjectWorkspacePanel } from "../../components/ProjectWorkspacePanel";
+import { SampleRunPanel } from "../../components/SampleRunPanel";
 import { toast } from "../../components/Toast";
 import { Routes } from "../../api/urls";
 import { formatCountdown, secondsUntil } from "../../api/format";
@@ -16,6 +18,8 @@ import {
     StudentExamDetail,
     StudentProblem,
     submitCode,
+    SubmissionSource,
+    downloadProjectAsset,
 } from "../../api/client";
 import {
     AgentCapabilities,
@@ -327,6 +331,7 @@ export function WorkbenchPage() {
 
     const [problemTab, setProblemTab] = useState<ProblemTabKey>("statement");
     const [submitting, setSubmitting] = useState(false);
+    const projectWorkspace = useRef<ProjectWorkspaceActions | null>(null);
 
     // AI 助教：级别 / 会话 / 消息 / 修改记录（接口见 api/agent.ts）
     const [agentCaps, setAgentCaps] = useState<AgentCapabilities | null>(null);
@@ -368,6 +373,8 @@ export function WorkbenchPage() {
         [submissions, problem]
     );
     const used = mySubmissions.length;
+    const projectProblem = problem?.type === "engineering" && !problem.publicFiles;
+    const projectConfigured = problem?.judgeProfile === "script";
     const remaining = detail ? Math.max(0, detail.submitLimit - used) : 0;
     const finished = !!detail && (detail.status === "finished" || seconds <= 0);
     const currentCode = (currentPath && contents[currentPath]) || "";
@@ -418,6 +425,7 @@ export function WorkbenchPage() {
         if (!detail || !problem) {
             return Promise.resolve();
         }
+        if (projectProblem) return projectWorkspace.current?.refresh().catch(() => {}) ?? Promise.resolve();
         return fetchAgentWorkspace(detail.id, problem.problemId)
             .then(result => applyWorkspaceFiles(result.files))
             .catch(() => {
@@ -604,9 +612,9 @@ export function WorkbenchPage() {
             content: text,
             action: agentAction,
             scope: agentScope,
-            activeFile: currentPath,
-            code: currentCode,
-            workspaceRevision: currentPath ? agentRevisions[currentPath] : undefined,
+            activeFile: projectProblem ? undefined : currentPath,
+            code: projectProblem ? undefined : currentCode,
+            workspaceRevision: !projectProblem && currentPath ? agentRevisions[currentPath] : undefined,
             workspaceFiles: problem?.publicFiles ? Object.fromEntries(
                 filesForProblem(problem).map(file => [file.path, contents[file.path] ?? file.content])
             ) : undefined,
@@ -678,7 +686,7 @@ export function WorkbenchPage() {
     };
 
     /** 提交答卷：入队异步判题，结果在结果页轮询 */
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (!detail || !problem) {
             return;
         }
@@ -687,10 +695,11 @@ export function WorkbenchPage() {
             return;
         }
         const projectFiles = problem.publicFiles ? Object.fromEntries(
-            Object.entries(problem.publicFiles)
-                .filter(([name, original]) => (contents[`p${problem.problemId}/${name}`] ?? original) !== original)
-                .map(([name, original]) => [name, contents[`p${problem.problemId}/${name}`] ?? original])
+            Object.keys(problem.publicFiles).map(name => [
+                name, contents[`p${problem.problemId}/${name}`] ?? "",
+            ])
         ) : undefined;
+        if (projectProblem && !projectWorkspace.current) return;
         const confirmed = window.confirm(
             `确认提交「任务 ${problem.order + 1}：${problem.title}」？\n` +
             (projectFiles ? `本次提交 ${Object.keys(projectFiles).length} 个修改文件，其他文件沿用题包初始版本。\n` : "") +
@@ -700,9 +709,10 @@ export function WorkbenchPage() {
             return;
         }
         setSubmitting(true);
-        submitCode(detail.id, problem.problemId, currentCode, problem.language, projectFiles)
-            .then(result => {
-                setSubmitting(false);
+        try {
+            const submission: SubmissionSource = projectProblem
+                ? await projectWorkspace.current!.snapshot() : currentCode;
+            const result = await submitCode(detail.id, problem.problemId, submission, problem.language, projectFiles);
                 setSubmissions(current => [
                     {
                         id: result.submission.id,
@@ -712,7 +722,7 @@ export function WorkbenchPage() {
                         language: problem.language,
                         status: result.submission.status,
                         created: result.submission.created,
-                        code: currentCode,
+                        code: projectProblem ? "" : currentCode,
                     },
                     ...current,
                 ]);
@@ -720,11 +730,11 @@ export function WorkbenchPage() {
                 toast(`已提交，正在判题，本题剩余 ${result.remaining} 次`, "success");
                 // 提交成功后进入 05 提交结果页查看收卷状态
                 history.push(Routes.examResult(detail.id));
-            })
-            .catch((e: ApiError) => {
-                setSubmitting(false);
-                toast(e.message, "warning");
-            });
+        } catch (error) {
+            toast((error as Error).message, "warning");
+        } finally {
+            setSubmitting(false);
+        }
     };
 
     if (loading || (!detail && !error)) {
@@ -833,16 +843,16 @@ export function WorkbenchPage() {
                             <Icon name="clock" size={14}/>
                             {finished ? "考试已结束" : `剩余 ${formatCountdown(seconds)}`}
                         </div>
-                        <div className="save-status">
+                        {!projectProblem && <div className="save-status">
                             <span className="dot" style={edited ? { background: "#f59e0b" } : undefined}/>
                             {edited ? "有未保存修改" : (savedClock ? `已自动保存 ${savedClock}` : "自动保存已开启")}
-                        </div>
+                        </div>}
                         <button className="btn-submit" type="button"
                                 onClick={handleSubmit}
-                                disabled={submitting || finished || remaining <= 0}
+                                disabled={submitting || finished || remaining <= 0 || (projectProblem && !projectConfigured)}
                                 title={finished ? "考试已结束" : remaining <= 0 ? "本题提交次数已用完" : undefined}>
                             <Icon name="arrow-up" size={14} strokeWidth={1.9}/>
-                            提交本题
+                            {submitting ? "提交中…" : projectProblem ? "提交工程" : "提交答卷"}
                             <span className="sub">剩余 {remaining} 次</span>
                         </button>
                         <div className="avatar">{(user?.nickname || "生").slice(0, 1)}</div>
@@ -858,7 +868,7 @@ export function WorkbenchPage() {
                                     任务 {problem.order + 1} / {problems.length} · {problem.title}
                                 </span>
                                 <span className="meta-chip blue">{TypeLabels[problem.type] || problem.type}</span>
-                                <span className="meta-chip">{problem.language}</span>
+                                <span className="meta-chip">{projectProblem ? "在线工程" : problem.language}</span>
                                 {problem.publicFiles && (
                                     <span className="meta-chip blue">
                                         {Object.keys(problem.publicFiles).length} 个文件一并提交
@@ -870,7 +880,7 @@ export function WorkbenchPage() {
                         <span className="meta-chip green"><span className="status-dot"/>提交后自动判题</span>
                     </div>
                     <div className="metabar-right">
-                        <span>本地草稿自动保存</span>
+                        <span>{projectProblem ? "网页编辑与判题" : "本地草稿自动保存"}</span>
                         <span className="divider-dot">·</span>
                         <span className="link" onClick={() => history.push(Routes.examPrecheck(examId))}>
                             查看考试须知
@@ -887,7 +897,7 @@ export function WorkbenchPage() {
                                     className="link"
                                     style={{ fontSize: 11 }}
                                     title="立即把当前代码写入本地草稿"
-                                    onClick={handleSaveDraft}>
+                                    disabled={projectProblem} onClick={handleSaveDraft}>
                                 保存草稿
                             </button>
                         </div>
@@ -897,21 +907,36 @@ export function WorkbenchPage() {
                                 const files = filesForProblem(item);
                                 return (
                                     <React.Fragment key={item.problemId}>
-                                        <div className="tree-row root" title={item.title}
-                                             onClick={() => setCurrentProblemId(item.problemId)}>
+                                        <div className={"tree-row root" + (item.problemId === problem?.problemId ? " active" : "")} title={item.title}
+                                             onClick={async () => {
+                                                 if (item.problemId === problem?.problemId) return;
+                                                 try {
+                                                     if (!finished) await projectWorkspace.current?.save();
+                                                     setCurrentProblemId(item.problemId);
+                                                 } catch (error) {
+                                                     toast((error as Error).message, "warning");
+                                                 }
+                                             }}>
                                             <Icon name="folder" size={13} strokeWidth={1.7} className="folder-ico"/>
                                             <span className="tree-filename">任务 {item.order + 1} · {item.title}</span>
-                                            <span className="tree-count">{files.length}</span>
+                                            {item.publicFiles && <span className="tree-count">{files.length}</span>}
                                         </div>
-                                        {files.map(file => {
+                                        {!(item.type === "engineering" && !item.publicFiles) && files.map(file => {
                                             const isActive = !!problem && item.problemId === problem.problemId && currentPath === file.path;
                                             return (
                                                 <div key={file.path}
                                                      className={"tree-row lv2" + (isActive ? " active" : "")}
                                                      title={file.label}
-                                                     onClick={() => {
-                                                         setCurrentProblemId(item.problemId);
-                                                         setSelectedProjectFile(current => ({ ...current, [item.problemId]: file.path }));
+                                                     onClick={async () => {
+                                                         try {
+                                                             if (item.problemId !== problem?.problemId && !finished) {
+                                                                 await projectWorkspace.current?.save();
+                                                             }
+                                                             setCurrentProblemId(item.problemId);
+                                                             setSelectedProjectFile(current => ({ ...current, [item.problemId]: file.path }));
+                                                         } catch (error) {
+                                                             toast((error as Error).message, "warning");
+                                                         }
                                                      }}>
                                                     <Icon name="file" size={13} strokeWidth={1.7} className="file-ico"/>
                                                     <span className="tree-filename">{file.label}</span>
@@ -1056,6 +1081,22 @@ export function WorkbenchPage() {
                         </div>
 
                         <div className="editor">
+                            {projectProblem && problem ? (
+                                <>
+                                    <div className="project-workspace-materials">
+                                        {projectConfigured && ([...(problem.hasStarterArchive ? ["starter.zip" as const] : []), "public.py" as const]).map(asset => (
+                                            <button className="btn btn-secondary btn-sm" type="button" key={asset}
+                                                    onClick={() => void downloadProjectAsset(detail.id, problem.problemId, asset)
+                                                        .catch((error: ApiError) => toast(error.message, "warning"))}>
+                                                {asset === "starter.zip" ? "下载课程资料" : "下载公开评分脚本"}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {projectConfigured ? <ProjectWorkspacePanel key={detail.id + ":" + problem.problemId}
+                                        ref={projectWorkspace} examId={detail.id} problem={problem} finished={finished}/>
+                                        : <p className="problem-body" role="status">此题尚未配置评分脚本。</p>}
+                                </>
+                            ) : <>
                             <div className="editor-tabs">
                                 <div className={"editor-tab active"}>
                                     <Icon name="file" size={12} stroke="#2563eb"/>
@@ -1088,6 +1129,11 @@ export function WorkbenchPage() {
                                     <div className="muted" style={{ padding: 12, fontSize: 12 }}>没有可编辑的文件</div>
                                 )}
                             </div>
+                            {problem && (
+                                <SampleRunPanel examId={detail.id} problem={problem}
+                                                code={currentCode} finished={finished}/>
+                            )}
+                            </>}
                         </div>
 
                     </section>

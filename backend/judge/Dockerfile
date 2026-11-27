@@ -14,8 +14,10 @@ RUN apt-get update \
         g++ \
         default-jdk-headless \
         libc6-dev \
+        make \
     && rm -rf /var/lib/apt/lists/*
 
-# 沙箱运行时由 Docker 以 nobody + 只读根文件系统 + tmpfs /sandbox 启动，
-# 这里只声明工作目录。
+RUN pip install --no-cache-dir pyftpdlib==2.2.0
+
+# 运行时使用低权限身份和只读根文件系统，工作目录由任务挂载。
 WORKDIR /sandbox

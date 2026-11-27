@@ -1,19 +1,35 @@
-from app.settings import *
+import os
+
+from .settings import *
 
 DEBUG = False
+SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
+JWT_SECRET = os.environ["JWT_SECRET"]
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ["DJANGO_ALLOWED_HOSTS"].split(",")
+    if host.strip()
+]
 
-# 数据库连接的密码和 IP 地址
-# 生产环境使用 docker-compose 中的 MySQL 服务，HOST 为服务名 mysql，
-# 密码为学号，由 docker-compose.yml 中 MYSQL_ROOT_PASSWORD 指定
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.mysql",
-        "NAME": "thss",
-        "USER": "root",
-        "PASSWORD": "2024013307",
         "HOST": "mysql",
         "PORT": "3306",
-        # MySQL 服务端已设置为 utf8mb4，连接层同样指定，避免中文乱码
+        "NAME": os.environ["MYSQL_DATABASE"],
+        "USER": os.environ["MYSQL_USER"],
+        "PASSWORD": os.environ["MYSQL_PASSWORD"],
         "OPTIONS": {"charset": "utf8mb4"},
     }
 }
+
+# 项目未提交迁移文件，部署时生成并随数据一并持久化。
+MIGRATION_MODULES = {
+    app_label: f"aicoding_migrations.{app_label}"
+    for app_label in ("user", "problem", "exam", "agent")
+}
+
+STATIC_URL = "/django-static/"
+STATIC_ROOT = "/django-static"
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SESSION_COOKIE_SECURE = CSRF_COOKIE_SECURE = os.environ["DJANGO_SECURE_COOKIES"] == "1"

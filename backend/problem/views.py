@@ -1,3 +1,6 @@
+import ast
+import json
+
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from django.conf import settings
 from django.db import transaction
@@ -10,9 +13,12 @@ from rest_framework.views import APIView
 from user.models import User
 from utils.jwt import role_required
 
+from exam.project_workspace import validate_template
+from judge.project import MAX_ARCHIVE_BYTES, read_project
+
 from . import controllers
 from .models import Problem, ProjectBundle
-from .project_package import ProjectPackageError, parse_package, MAX_ARCHIVE_BYTES
+from .project_package import ProjectPackageError, parse_package, MAX_ARCHIVE_BYTES as MAX_PACKAGE_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +53,11 @@ def _validate_fields(content, partial=False):
         fields["description"] = str(content.get("description") or "")
     if has("starterCode"):
         fields["starter_code"] = str(content.get("starterCode") or "")
+    if has("judgeProfile"):
+        profile = content.get("judgeProfile") or ""
+        if profile not in ("", Problem.JUDGE_SCRIPT):
+            return None, "未知工程评测方案"
+        fields["judge_profile"] = profile
     if has("image"):
         image = str(content.get("image") or "").strip()
         if len(image) > 128:
@@ -98,6 +109,65 @@ def _validate_fields(content, partial=False):
         fields["difficulty"] = value
 
     return fields, None
+
+
+def _problem_payload(request, existing=None):
+    """从编辑表单读取题目元数据和可独立替换的工程附件。"""
+    uploads = request.FILES
+    payload = request.data
+    if "payload" in payload:
+        try:
+            payload = json.loads(payload["payload"])
+        except (TypeError, ValueError):
+            raise ValueError("题目元数据格式无效")
+    if not isinstance(payload, dict):
+        raise ValueError("题目元数据格式无效")
+    fields, error = _validate_fields(payload, partial=existing is not None)
+    if error:
+        raise ValueError(error)
+    kind = fields.get("type", existing.type if existing else Problem.TYPE_ENGINEERING)
+    if kind != Problem.TYPE_ENGINEERING:
+        if uploads or fields.get("judge_profile"):
+            raise ValueError("只有工程题支持评分脚本和起始项目")
+        fields["judge_profile"] = ""
+        return payload, fields
+    if existing is not None and hasattr(existing, "project_bundle"):
+        return payload, fields
+    if not uploads and fields.get("judge_profile", getattr(existing, "judge_profile", "")) != Problem.JUDGE_SCRIPT:
+        raise ValueError("工程题须上传公开和隐藏评分脚本")
+    fields["judge_profile"] = Problem.JUDGE_SCRIPT
+    for key, field, label in (
+        ("starterArchive", "project_starter", "课程资料包"),
+        ("workspaceTemplate", "project_template", "在线工作区模板"),
+        ("publicScript", "project_public", "公开评分脚本"),
+        ("hiddenScript", "project_hidden", "隐藏评分脚本"),
+    ):
+        item = uploads.get(key)
+        if item is None:
+            if field in {"project_public", "project_hidden"} and not getattr(existing, field, None):
+                raise ValueError(f"请上传{label}")
+            continue
+        if field in {"project_starter", "project_template"}:
+            if item.size > MAX_ARCHIVE_BYTES:
+                raise ValueError(f"{label}不能超过 16 MB")
+            data = item.read()
+            if field == "project_template":
+                validate_template(data)
+            else:
+                read_project(data)
+        else:
+            if item.size > 256 * 1024:
+                raise ValueError(f"{label}不能超过 256 KB")
+            try:
+                data = item.read().decode("utf-8-sig")
+                tree = ast.parse(data)
+                if not any(isinstance(node, ast.FunctionDef) and node.name == "grade" for node in tree.body):
+                    raise ValueError("缺少 grade 函数")
+                compile(tree, "grade.py", "exec")
+            except (UnicodeError, SyntaxError, ValueError) as exc:
+                raise ValueError(f"{label}必须是有效的 Python 文件，并定义 grade(project)") from exc
+        fields[field] = data
+    return payload, fields
 
 
 def _validate_algorithm_content(problem_type, description, samples, existing=None):
@@ -187,6 +257,7 @@ class ProblemListView(APIView):
                     "language": {"type": "string", "description": "python / cpp / c / java"},
                     "difficulty": {"type": "string", "description": "easy / medium / hard"},
                     "starterCode": {"type": "string", "description": "初始代码"},
+                    "judgeProfile": {"type": "string", "description": "工程评测方案：script 或空"},
                     "image": {"type": "string", "description": "依赖镜像"},
                     "practiceEnabled": {"type": "boolean", "description": "是否开放自由练习"},
                     "timeLimitMs": {"type": "integer", "description": "单用例时限（毫秒）"},
@@ -211,10 +282,10 @@ class ProblemListView(APIView):
     )
     @role_required(User.ROLE_ADMIN, User.ROLE_TEACHER)
     def post(self, request, *args, **kwargs):
-        content = request.data or {}
-        fields, error = _validate_fields(content, partial=False)
-        if error:
-            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            content, fields = _problem_payload(request)
+        except ValueError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         samples, error = _validate_samples(content)
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
@@ -271,6 +342,7 @@ class ProblemDetailView(APIView):
                     "language": {"type": "string"},
                     "difficulty": {"type": "string"},
                     "starterCode": {"type": "string"},
+                    "judgeProfile": {"type": "string"},
                     "image": {"type": "string"},
                     "practiceEnabled": {"type": "boolean"},
                     "timeLimitMs": {"type": "integer"},
@@ -296,10 +368,10 @@ class ProblemDetailView(APIView):
         if not ok:
             return Response({"message": "题目不存在"}, status=status.HTTP_404_NOT_FOUND)
 
-        content = request.data or {}
-        fields, error = _validate_fields(content, partial=True)
-        if error:
-            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            content, fields = _problem_payload(request, problem)
+        except ValueError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         samples, error = _validate_samples(content)
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
@@ -349,10 +421,10 @@ class ProjectImportView(APIView):
     @role_required(User.ROLE_ADMIN, User.ROLE_TEACHER)
     def post(self, request, *args, **kwargs):
         uploaded = request.FILES.get("file")
-        if uploaded is None or uploaded.size > MAX_ARCHIVE_BYTES:
+        if uploaded is None or uploaded.size > MAX_PACKAGE_BYTES:
             return Response({"message": "请上传不超过 8 MB 的工程题 ZIP"}, status=400)
         try:
-            raw = uploaded.read(MAX_ARCHIVE_BYTES + 1)
+            raw = uploaded.read(MAX_PACKAGE_BYTES + 1)
             metadata, public = parse_package(raw)
         except ProjectPackageError as exc:
             return Response({"message": str(exc)}, status=400)

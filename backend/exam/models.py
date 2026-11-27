@@ -152,6 +152,30 @@ class Submission(models.Model):
         return f"{self.student.username}@{self.exam.title}#{self.problem_id}"
 
 
+class ProjectWorkspace(models.Model):
+    exam = models.ForeignKey(Exam, on_delete=models.CASCADE)
+    problem = models.ForeignKey(Problem, on_delete=models.CASCADE)
+    student = models.ForeignKey(User, on_delete=models.CASCADE)
+    fixed_archive = models.BinaryField(null=True)
+    revision = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        unique_together = ("exam", "problem", "student")
+
+
+class ProjectSubmission(models.Model):
+    submission = models.OneToOneField(Submission, on_delete=models.CASCADE, related_name="project")
+    archive = models.BinaryField()
+    profile = models.CharField(max_length=16)
+    public_script = models.TextField(blank=True, default="")
+    hidden_script = models.TextField(blank=True, default="")
+    # 保留历史工程题的评分记录。
+    automatic_points = models.PositiveSmallIntegerField(null=True)
+    warmup_points = models.PositiveSmallIntegerField(null=True)
+    report_points = models.PositiveSmallIntegerField(null=True)
+    bonus_points = models.PositiveSmallIntegerField(null=True)
+
+
 class SubmissionCase(models.Model):
     """
     单个测试用例的判定结果。
@@ -166,6 +190,8 @@ class SubmissionCase(models.Model):
         Submission, on_delete=models.CASCADE, related_name="cases"
     )
     case_index = models.PositiveIntegerField(verbose_name="用例序号")
+    earned_points = models.PositiveIntegerField(null=True)
+    max_points = models.PositiveIntegerField(null=True)
     sample = models.ForeignKey(
         "problem.TestSample",
         null=True,

@@ -205,23 +205,55 @@ manage.py check
 JUDGE_INTEGRATION=1 python manage.py test judge.tests.JudgeTaskTests
 ```
 
-## 部署（docker-compose）
 
-```bash
-# 先构建判题沙箱镜像（只需在镜像变更时执行）
-docker compose --profile build build judge-base
-# 再启动 redis / app / judge / nginx / mysql
-docker compose up -d --build
+
+### 工程题评分脚本
+
+教师在题库选择「工程题」，填写任务和源码目录约定，上传公开和隐藏两份 Python 评分脚本。可另传两个附件。在线工作区模板预置每位学生的工程文件，课程资料包供下载。学生直接在工作台新建和编辑多文件，保存后的版本供公开试运行和正式提交使用。模板中非文本或超过 256 KB 的文件作为只读附件进入评测快照。公开脚本可下载。试运行不计入正式提交次数。隐藏脚本由独立评测容器运行，学生可以查看得分和通过情况。
+
+每份脚本定义 `grade(project)`，返回评分项列表。每项包含 `name`、`points`、`max_points`，可带 `feedback`。分值使用整数，单项满分为 1–1000 分，每份脚本可返回 1–100 项。两份脚本的实得分之和除以满分之和，再乘本题分值。公开与隐藏权重由各自的满分之和决定。
+
+```python
+def grade(project):
+    result = project.run(["python3", "src/main.py"], stdin="2 3\n")
+    passed = result["status"] == 0 and result["output"].strip() == "5"
+    return [{
+        "name": "基础输入",
+        "points": 10 if passed else 0,
+        "max_points": 10,
+        "feedback": "" if passed else "输出不符合要求",
+    }]
 ```
 
-拓扑：`nginx（宿主机 8000）→ app（gunicorn，settings_prod）→ mysql`；
-`app ──Redis──> judge worker ──docker.sock──> 一次性沙箱容器`。
+`project.run` 在学生容器中运行命令，返回退出状态与输出。可用 `cwd` 指定相对源码子目录，`timeout` 指定 1–30 秒的运行时限。服务类题目可使用 `with project.start([...]):` 启动学生程序，参考对端经回环连接它。两份脚本分别使用全新的源码副本。评分脚本通过 `project.run` 和 `project.start` 执行学生代码，测试数据可放于 `project.private`（仅评分容器访问）或 `project.shared`（两端可访问）。
 
-- `judge` 服务挂载 `/var/run/docker.sock`，等价宿主机 root 权限，只能放在受信任的判题服务中；
-- 沙箱容器本身禁用网络、丢弃全部 capabilities、非 root、只读根文件系统，判完即删；
-- `settings.py` 里的 `JWT_SECRET` 与 `settings_prod.py` 里的 MySQL 口令目前是课程模板的占位值，
-  正式部署前改为环境变量注入；
-- 前端构建产物由 nginx 直接托管，`/api` 反向代理到 app 容器（见 `nginx/app.conf`）。
+起始项目和提交包上限为 16 MB，单份评分脚本上限为 256 KB。更新此功能后执行数据库迁移并重建应用镜像。旧工程题可在题库重新编辑并上传两份评分脚本。
+
+## Docker 部署
+
+在装有 Docker 和 Compose 的 Linux 服务器上，从仓库根目录执行：
+
+```bash
+cd backend
+umask 077
+test -f .env || cp .env.example .env
+nano .env
+```
+
+按 `.env.example` 的说明填写密钥和密码。每项用 `openssl rand -hex 32` 单独生成，实际配置保存在服务器的 `.env` 中。
+
+```bash
+docker compose config --quiet
+docker compose --profile build build judge-base
+docker compose up -d --build
+docker compose ps -a
+curl -I http://127.0.0.1:8000
+```
+
+- `migrate` 显示 `Exited (0)` 表示数据库迁移和 Django 静态文件收集完成。应用和判题服务在此之后启动。
+- Nginx 托管前端并转发后端请求，默认监听宿主机的 `127.0.0.1:8000`。通过宿主机的加密反向代理提供域名访问时，按模板填写域名并启用安全 Cookie。上游反向代理需要保留请求的主机名和协议，并关闭流式响应缓冲。
+- MySQL 使用新的 Docker 数据卷。若旧部署曾使用宿主机目录存放数据库，先备份现有数据，再单独导入。
+- 判题服务通过 `/var/run/docker.sock` 请求宿主机启动一次性沙箱容器，部署时使用受信任的宿主机。
 
 ## 约定
 

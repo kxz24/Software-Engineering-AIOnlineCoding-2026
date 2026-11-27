@@ -8,6 +8,7 @@ from datetime import timedelta
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from problem.models import Problem
 from user.controllers import create_user
 from user.models import User
 from utils.jwt import encrypt_password
@@ -110,7 +111,7 @@ class ProblemCRUDTestCase(TestCase):
             {
                 "title": "修复订单排序",
                 "description": "金额相同时按创建时间升序。",
-                "type": "engineering",
+                "type": "algorithm",
                 "language": "python",
                 "difficulty": "medium",
                 "starterCode": "def sort_orders(orders): pass",
@@ -223,6 +224,8 @@ class ProblemCRUDTestCase(TestCase):
             "/api/v1/problems",
             {
                 "title": "待删除",
+                "type": "algorithm",
+                "description": "测试题目与用例关联删除",
                 "samples": [{"name": "样例 1", "input": "", "expected": ""}],
             },
             format="json",
@@ -235,9 +238,7 @@ class ProblemCRUDTestCase(TestCase):
 
     def test_list_filter(self):
         """按关键字搜索与题型过滤"""
-        self.client.post(
-            "/api/v1/problems", {"title": "修复排序", "type": "engineering"}, format="json"
-        )
+        Problem.objects.create(title="修复排序", type=Problem.TYPE_ENGINEERING)
         self.client.post(
             "/api/v1/problems",
             {
@@ -288,6 +289,20 @@ class ProjectImportTests(TestCase):
         self.assertEqual(student["publicFiles"], {"src/main.c": "int main(void) { return 0; }"})
         self.assertNotIn("graderCommand", student)
         self.assertNotIn("hidden grader", json.dumps(student))
+
+    def test_imported_problem_description_can_be_edited(self):
+        response = self.client.post("/api/v1/problems/import-project", {"file": self.package()})
+        self.assertEqual(response.status_code, 201, response.content)
+        problem_id = response.json()["id"]
+        response = self.client.patch(
+            f"/api/v1/problems/{problem_id}",
+            {"title": "Updated project", "description": "Updated statement", "difficulty": "hard"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["description"], "Updated statement")
+        self.assertEqual(response.json()["publicFiles"], {"src/main.c": "int main(void) { return 0; }"})
+        self.assertEqual(Problem.objects.get(pk=problem_id).judge_profile, "")
 
     def test_reject_path_traversal(self):
         response = self.client.post(

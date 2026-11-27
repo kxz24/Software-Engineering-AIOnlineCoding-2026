@@ -199,6 +199,15 @@ LOGIN_URL = '/admin/login/'
 # ---------------------------------------------------------------------------
 # 提交接口只负责入队，判题在独立的 Celery worker 中执行。
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
+CACHES = {
+    "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
+    "sample_runs": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.environ.get("SAMPLE_RUN_CACHE_URL", CELERY_BROKER_URL),
+        "KEY_PREFIX": "aicoding-sample-run",
+        "OPTIONS": {"socket_connect_timeout": 2, "socket_timeout": 2},
+    },
+}
 CELERY_TASK_TIME_LIMIT = 120          # 单次判分硬上限（秒）
 CELERY_TASK_SOFT_TIME_LIMIT = 110     # 软上限，给清理容器留时间
 CELERY_TASK_ACKS_LATE = True

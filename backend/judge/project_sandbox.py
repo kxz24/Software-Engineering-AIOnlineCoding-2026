@@ -28,13 +28,13 @@ def run_project_sandbox(bundle, files):
     image = getattr(bundle, "prepared_image", "") or settings.PROJECT_JUDGE_RUNTIMES.get(bundle.runtime)
     if not image:
         raise SandboxError("工程题运行环境未配置")
-    with open(os.path.join(os.path.dirname(__file__), "assets", "project_runner.py"), "rb") as handle:
+    with open(os.path.join(os.path.dirname(__file__), "assets", "project_bundle_runner.py"), "rb") as handle:
         runner = handle.read()
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
         _add_file(archive, "package.zip", _runtime_package(bytes(bundle.archive)))
         _add_file(archive, "submission.json", json.dumps({"files": files}, ensure_ascii=False).encode())
-        _add_file(archive, "project_runner.py", runner)
+        _add_file(archive, "project_bundle_runner.py", runner)
 
     client = _docker_client()
     try:
@@ -47,8 +47,8 @@ def run_project_sandbox(bundle, files):
         container = client.containers.create(
             image=image,
             command=["/bin/sh", "-c",
-                     "while [ ! -f /sandbox/project_runner.py ]; do sleep 0.05; done; "
-                     "exec python3 /sandbox/project_runner.py"],
+                     "while [ ! -f /sandbox/project_bundle_runner.py ]; do sleep 0.05; done; "
+                     "exec python3 /sandbox/project_bundle_runner.py"],
             working_dir="/sandbox", network_disabled=True,
             mem_limit="768m", nano_cpus=1_000_000_000, pids_limit=64,
             read_only=True, volumes={volume.name: {"bind": "/sandbox", "mode": "rw"}},

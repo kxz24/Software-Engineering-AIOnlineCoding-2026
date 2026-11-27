@@ -24,7 +24,7 @@ const TypeLabels: Record<string, string> = {
 /** 表单里的题型选项：直接标出当前是否支持自动判题 */
 const TypeOptionLabels: Record<string, string> = {
     algorithm: "算法题（自动判题）",
-    engineering: "工程题（旧版单文件表单）",
+    engineering: "工程题",
 };
 
 const LanguageLabels: Record<string, string> = {
@@ -52,11 +52,13 @@ type SampleForm = SamplePayload;
 /** 编辑器表单：id 为空表示新建 */
 interface ProblemForm {
     id: number | null;
+    hasProjectBundle?: boolean;
     title: string;
     type: string;
     language: string;
     difficulty: string;
     image: string;
+    projectFiles: Partial<Record<"starterArchive" | "workspaceTemplate" | "publicScript" | "hiddenScript", boolean>>;
     description: string;
     starterCode: string;
     timeLimitMs: number;
@@ -73,6 +75,7 @@ const EmptyForm: ProblemForm = {
     language: "python",
     difficulty: "medium",
     image: "",
+    projectFiles: {},
     description: "",
     starterCode: "",
     timeLimitMs: 2000,
@@ -122,6 +125,7 @@ export function ProblemBankPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    const [projectUploads, setProjectUploads] = useState<Partial<Record<"starterArchive" | "workspaceTemplate" | "publicScript" | "hiddenScript", File>>>({});
     const [form, setForm] = useState<ProblemForm | null>(null);
     const [formError, setFormError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
@@ -160,21 +164,25 @@ export function ProblemBankPage() {
     }, [preparing, keyword]);
 
     const openCreate = () => {
+        setProjectUploads({});
         setForm({ ...EmptyForm, samples: [] });
         setFormError(null);
     };
 
     const openEdit = (problemId: number) => {
+        setProjectUploads({});
         setFormError(null);
         fetchProblem(problemId)
             .then(detail => {
                 setForm({
                     id: detail.id,
+                    hasProjectBundle: detail.hasProjectBundle,
                     title: detail.title,
                     type: detail.type,
                     language: detail.language,
                     difficulty: detail.difficulty,
                     image: detail.image,
+                    projectFiles: detail.projectFiles || {},
                     description: detail.description,
                     starterCode: detail.starterCode,
                     timeLimitMs: detail.timeLimitMs,
@@ -210,7 +218,13 @@ export function ProblemBankPage() {
                 return;
             }
         }
-        if (form.samples.some(sample => !sample.name.trim())) {
+        if (form.type === "engineering" && !form.hasProjectBundle && (["publicScript", "hiddenScript"] as const).some(
+            key => !projectUploads[key] && !form.projectFiles[key]
+        )) {
+            setFormError("请上传公开和隐藏评分脚本。");
+            return;
+        }
+        if (form.type === "algorithm" && form.samples.some(sample => !sample.name.trim())) {
             setFormError("每个测试用例都需要名称。");
             return;
         }
@@ -223,19 +237,22 @@ export function ProblemBankPage() {
             language: form.language,
             difficulty: form.difficulty,
             image: form.image.trim(),
+            judgeProfile: form.type === "engineering" ? "script" : "",
             starterCode: form.starterCode,
             timeLimitMs: Number(form.timeLimitMs),
             memoryLimitMb: Number(form.memoryLimitMb),
             outputLimitKb: Number(form.outputLimitKb),
             practiceEnabled: form.practiceEnabled,
-            samples: form.samples,
+            samples: form.type === "algorithm" ? form.samples : [],
         };
         try {
             if (form.id == null) {
-                await createProblem(payload);
+                await createProblem(payload, form.type === "engineering" ? projectUploads : undefined);
                 toast("题目已创建", "success");
             } else {
-                await updateProblem(form.id, payload);
+                await updateProblem(form.id, form.hasProjectBundle ? {
+                    title: payload.title, description: payload.description, difficulty: payload.difficulty,
+                } : payload, form.type === "engineering" && !form.hasProjectBundle ? projectUploads : undefined);
                 toast("题目已保存", "success");
             }
             setForm(null);
@@ -403,6 +420,7 @@ export function ProblemBankPage() {
                                 <select className="select"
                                         style={SmallInputStyle}
                                         value={form.type}
+                                        disabled={form.hasProjectBundle}
                                         onChange={event => setForm({ ...form, type: event.target.value })}>
                                     {Object.keys(TypeOptionLabels).map(key => (
                                         <option key={key} value={key}>{TypeOptionLabels[key]}</option>
@@ -414,7 +432,11 @@ export function ProblemBankPage() {
                                 <select className="select"
                                         style={SmallInputStyle}
                                         value={form.language}
+                                        disabled={form.hasProjectBundle}
                                         onChange={event => setForm({ ...form, language: event.target.value })}>
+                                    {form.hasProjectBundle && !LanguageLabels[form.language] && (
+                                        <option value={form.language}>{form.language}</option>
+                                    )}
                                     {Object.keys(LanguageLabels).map(key => (
                                         <option key={key} value={key}>{LanguageLabels[key]}</option>
                                     ))}
@@ -479,7 +501,8 @@ export function ProblemBankPage() {
                             </div>
                         ) : (
                             <div className="card-sub" style={{ marginTop: 8 }}>
-                                工程题暂不支持自动判题，提交后会标记为「需人工复核」。
+                                {form.hasProjectBundle ? "学生提交题包中的全部公开文件，平台按题包评分。" :
+                                    "学生提交源码包，平台按公开和隐藏脚本自动计分。"}
                             </div>
                         )}
 
@@ -491,6 +514,7 @@ export function ProblemBankPage() {
                                       placeholder="任务背景、要求与验收标准"
                                       onChange={event => setForm({ ...form, description: event.target.value })}/>
                         </div>
+                        {form.type === "algorithm" ? <>
                         <div className="field" style={{ marginTop: 10 }}>
                             <div className="label">初始代码 / 仓库说明</div>
                             <textarea className="input"
@@ -562,6 +586,38 @@ export function ProblemBankPage() {
                                 </span>
                             </div>
                         ))}
+
+                        </> : !form.hasProjectBundle && (
+                            <fieldset className="field" style={{ marginTop: 12 }}>
+                                <legend className="label">工程题附件</legend>
+                                {([
+                                    ["workspaceTemplate", "在线工作区模板（学生打开题目时自动加载）", ".zip", "16 MB"],
+                                    ["starterArchive", "课程资料包（可选，学生可下载）", ".zip", "16 MB"],
+                                    ["publicScript", "公开评分脚本（学生可下载和试运行）", ".py", "256 KB"],
+                                    ["hiddenScript", "隐藏评分脚本（仅正式评分）", ".py", "256 KB"],
+                                ] as const).map(([key, label, accept, limit]) => (
+                                    <label className="field" key={key}>
+                                        <span className="label">{label}</span>
+                                        <input type="file" accept={accept}
+                                               onChange={event => setProjectUploads(current => ({
+                                                   ...current, [key]: event.target.files?.[0],
+                                               }))}/>
+                                        <small className="muted">{projectUploads[key]?.name
+                                            || (form.projectFiles[key] ? "已有附件，选新文件替换" : `上限 ${limit}`)}</small>
+                                    </label>
+                                ))}
+                                <details>
+                                    <summary>评分脚本格式与示例</summary>
+                                    <p>每个脚本定义 grade(project)，返回评分项。两份脚本的得分之和除以满分之和，再按本题分值换算。</p>
+                                    <pre>{`def grade(project):
+    result = project.run(["python3", "main.py"], stdin="2 3\\n")
+    passed = result["status"] == 0 and result["output"].strip() == "5"
+    return [{"name": "正常输入", "points": 10 if passed else 0,
+             "max_points": 10, "feedback": "" if passed else "结果不符"}]`}</pre>
+                                    <p>服务类题目可用 project.start 启动学生程序，再通过本地回环与其交互。用 project.run 运行学生代码。</p>
+                                </details>
+                            </fieldset>
+                        )}
 
                         {formError && (
                             <div className="login-error" style={{ marginTop: 8 }}>

@@ -10,12 +10,53 @@ import {
     ExamDetail,
     ExamSubmissionEntry,
     ExamSummary,
+    SubmissionDetail,
+    downloadProjectArchive,
+    fetchSubmission,
     fetchExam,
     fetchExamSubmissions,
     fetchExams,
 } from "../../api/client";
-import { submissionLabel } from "../../api/judge";
+import { submissionLabel, verdictMeta } from "../../api/judge";
 import { AgentUsageCard } from "../../components/AgentUsageCard";
+
+function ProjectResultPanel({ submissionId }: { submissionId: number }) {
+    const [detail, setDetail] = useState<SubmissionDetail | null>(null);
+    const [error, setError] = useState("");
+
+    const load = async () => {
+        try {
+            setError("");
+            setDetail(await fetchSubmission(submissionId));
+        } catch (e) {
+            setError((e as ApiError).message);
+        }
+    };
+
+    return (
+        <details onToggle={event => {
+            if (event.target === event.currentTarget && (event.currentTarget as HTMLDetailsElement).open) void load();
+        }}>
+            <summary>查看工程提交</summary>
+            <button className="btn btn-secondary" type="button" onClick={() => {
+                void downloadProjectArchive(submissionId).catch(e => setError(e.message));
+            }}>下载源码包</button>
+            {error && <p role="alert">{error}</p>}
+            {!detail && !error && <p role="status">正在读取提交…</p>}
+            {detail?.judgeError && <p>{detail.judgeError}</p>}
+            {detail && detail.cases.length > 0 && (
+                <>
+                    <p>自动得分 {detail.score} 分</p>
+                    <ul>{detail.cases.map((item, index) => (
+                        <li key={index}>{item.isSample ? "公开" : "隐藏"} · {item.name} · {verdictMeta(item.verdict).label}
+                            {item.maxPoints != null && ` · ${item.earnedPoints}/${item.maxPoints} 分`}
+                            {item.errorExcerpt && ` · ${item.errorExcerpt}`}</li>
+                    ))}</ul>
+                </>
+            )}
+        </details>
+    );
+}
 
 /** 每 15 秒自动拉取一次提交动态 */
 const RefreshIntervalMs = 15000;
@@ -456,6 +497,7 @@ function ProctorDashboard({ examId }: { examId: number }) {
                                                     {submissionLabel(item).label}
                                                     {item.status === "judged" ? ` · ${item.score ?? 0} 分` : ""}
                                                 </div>
+                                                {item.hasProject && <ProjectResultPanel submissionId={item.id}/>}
                                             </div>
                                         </div>
                                     ))}

@@ -1,8 +1,14 @@
+import json
 from datetime import timedelta
+from unittest.mock import patch
 
-from django.test import TestCase
+from django.core.cache import caches
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
+
+from judge.sandbox import SandboxResult
+from judge.tasks import run_sample_tests
 
 from problem.models import Problem, ProjectBundle
 from user.models import User
@@ -97,6 +103,79 @@ class ExamBaseTestCase(TestCase):
         resp = self.client.post(f"/api/v1/exams/{exam_id}/publish", {}, format="json")
         assert resp.status_code == 200, resp.content
         return resp.json()
+
+
+@override_settings(
+    JUDGE_ENQUEUE_ENABLED=True,
+    CACHES={
+        "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
+        "sample_runs": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "test-sample-runs",
+        },
+    },
+)
+class SampleRunTestCase(ExamBaseTestCase):
+    def setUp(self):
+        super().setUp()
+        caches["sample_runs"].clear()
+        self.auth()
+        self.exam_id = self.create_exam()["id"]
+        self.assemble(self.exam_id)
+        self.problem = self.problem1
+        self.problem.language = Problem.LANGUAGE_CPP
+        self.problem.save(update_fields=["language"])
+        self.url = f"/api/v1/my/exams/{self.exam_id}/problems/{self.problem.id}/sample-runs"
+        self.auth(self.student_token)
+
+    @patch("exam.views.run_sample_tests.apply_async")
+    @patch("judge.tasks.run_sandbox")
+    def test_preview_runs_only_public_samples_without_spending_a_submission(self, sandbox, enqueue):
+        sandbox.return_value = SandboxResult(
+            compile_output="",
+            cases=[{
+                "index": 1, "verdict": "wrong_answer", "time_ms": 6,
+                "output_excerpt": "[1,0]", "error_excerpt": "",
+            }],
+        )
+        exam = Exam.objects.get(pk=self.exam_id)
+        for _ in range(exam.submit_limit):
+            Submission.objects.create(exam=exam, problem=self.problem, student=self.student)
+
+        response = self.client.post(self.url, {"code": "int main() {}"}, format="json")
+        self.assertEqual(response.status_code, 202, response.content)
+        result_url = f"{self.url}/{response.json()['runId']}"
+        self.assertEqual(self.client.get(result_url).json(), {"status": "queued"})
+        self.assertEqual(self.client.post(self.url, {"code": "int main() {}"}, format="json").status_code, 409)
+
+        run_sample_tests.run(*enqueue.call_args.kwargs["args"])
+        sandbox_args = sandbox.call_args.kwargs
+        self.assertEqual(sandbox_args["language_key"], Problem.LANGUAGE_CPP)
+        self.assertEqual([case.name for case in sandbox_args["cases"]], ["样例 1"])
+        result = self.client.get(result_url).json()
+        self.assertTrue(result["compileOk"])
+        self.assertEqual(result["cases"][0]["expectedOutput"], "[0,1]")
+        self.assertEqual(result["cases"][0]["outputExcerpt"], "[1,0]")
+        self.assertEqual(Submission.objects.count(), exam.submit_limit)
+
+        self.auth(self.login(self.other_student.username))
+        self.assertEqual(self.client.get(result_url).status_code, 404)
+
+    @patch("exam.views.run_sample_tests.apply_async")
+    @patch("judge.tasks.run_sandbox")
+    def test_compiler_diagnostics_are_available_without_public_samples(self, sandbox, enqueue):
+        self.problem.samples.filter(is_sample=True).delete()
+        sandbox.return_value = SandboxResult("main.cpp: error: expected ';'", [], compile_ok=False)
+
+        response = self.client.post(self.url, {"code": "int main() {"}, format="json")
+        self.assertEqual(response.status_code, 202, response.content)
+        run_sample_tests.run(*enqueue.call_args.kwargs["args"])
+        self.assertTrue(sandbox.call_args.kwargs["compile_only"])
+        self.assertEqual(sandbox.call_args.kwargs["cases"], [])
+        result = self.client.get(f"{self.url}/{response.json()['runId']}").json()
+        self.assertFalse(result["compileOk"])
+        self.assertIn("expected ';'", result["compileOutput"])
+        self.assertEqual(Submission.objects.count(), 0)
 
 
 class ExamRBACTestCase(ExamBaseTestCase):
@@ -485,6 +564,30 @@ class StudentExamTestCase(ExamBaseTestCase):
         resp = self.client.get(f"/api/v1/exams/{exam_id}/submissions").json()
         self.assertEqual(resp["total"], 2)
         self.assertEqual(resp["submissions"][0]["username"], "2023012345")
+
+    def test_project_bundle_submission_preserves_all_files(self):
+        self.auth()
+        bundle = ProjectBundle.objects.create(
+            problem=self.problem2, archive=b"package", runtime="build-tools",
+            public_files={"src/main.c": "starter", "Makefile": "all:"},
+            grader_command=["python3", "private/grade.py"],
+        )
+        exam = self.create_exam()
+        self.assemble(exam["id"])
+        self.auth(self.student_token)
+        url = f"/api/v1/my/exams/{exam['id']}/problems/{self.problem2.id}/submissions"
+        files = {"src/main.c": "int main(void) { return 0; }", "Makefile": "all:"}
+        response = self.client.post(url, {"files": files}, format="json")
+        self.assertEqual(response.status_code, 201, response.content)
+        submission = Submission.objects.get(pk=response.json()["submission"]["id"])
+        self.assertEqual(json.loads(submission.code)["files"], files)
+        self.assertFalse(hasattr(submission, "project"))
+
+        bundle.preparation_status = "failed"
+        bundle.save(update_fields=["preparation_status"])
+        response = self.client.post(url, {"files": files}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Submission.objects.filter(problem=self.problem2).count(), 1)
 
     def test_submission_time_rules(self):
         """未开始 / 已结束的考试不能提交"""

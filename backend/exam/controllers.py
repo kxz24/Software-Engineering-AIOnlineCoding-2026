@@ -4,14 +4,14 @@ import logging
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Exists, Max, OuterRef
 from django.utils import timezone
 
 from problem.models import Problem
 from user.controllers import record_audit
 from user.models import User
 
-from .models import Exam, ExamCandidate, ExamProblem, Submission
+from .models import Exam, ExamCandidate, ExamProblem, ProjectSubmission, Submission
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +274,8 @@ def _problem_for_student(item, best_score=0):
         "difficulty": problem.difficulty,
         "description": problem.description,
         "starterCode": problem.starter_code,
+        "judgeProfile": problem.judge_profile,
+        "hasStarterArchive": getattr(item, "has_starter", False),
         "publicFiles": problem.project_bundle.public_files if hasattr(problem, "project_bundle") else None,
         "samples": [
             {"name": s.name, "input": s.input_data, "expected": s.expected_output}
@@ -311,7 +313,11 @@ def student_exam_detail(student, exam):
         return "不在本场考试的名单中", False
 
     best = _best_scores(exam, student)
-    items = list(exam.exam_problems.select_related("problem"))
+    items = list(exam.exam_problems.select_related("problem")
+                 .defer("problem__project_starter", "problem__project_template", "problem__project_public", "problem__project_hidden")
+                 .annotate(has_starter=Exists(Problem.objects.filter(
+                     pk=OuterRef("problem_id"), project_starter__isnull=False
+                 ))))
     detail = {
         "id": exam.id,
         "title": exam.title,
@@ -338,7 +344,7 @@ def submission_count(exam, problem_id, student):
     ).count()
 
 
-def create_submission(student, exam, problem_id, code, language):
+def create_submission(student, exam, problem_id, code, language, archive=None):
     """
     学生提交代码：校验后落库，并交给 Celery 异步判题。
 
@@ -371,10 +377,27 @@ def create_submission(student, exam, problem_id, code, language):
                 False,
             )
 
+        profile = item.problem.judge_profile if item.problem.type == Problem.TYPE_ENGINEERING else ""
+        bundle = getattr(item.problem, "project_bundle", None)
+        if bundle is not None and bundle.preparation_status != "ready":
+            return "此工程题运行环境尚未准备完成", 400, False
+        if item.problem.type == Problem.TYPE_ENGINEERING and bundle is None and (
+            profile != Problem.JUDGE_SCRIPT or not item.problem.project_public or not item.problem.project_hidden
+        ):
+            return "此工程题尚未配置公开和隐藏评分脚本", 400, False
+        if (bundle is None and profile == Problem.JUDGE_SCRIPT) != (archive is not None):
+            detail = "此题需要上传 ZIP 工程包" if profile else "此题只接受代码文本"
+            return detail, 400, False
+
         submission = Submission.objects.create(
             exam=locked_exam, problem=item.problem, student=student,
             code=code, language=language or item.problem.language,
         )
+        if archive is not None:
+            ProjectSubmission.objects.create(
+                submission=submission, profile=profile, archive=archive,
+                public_script=item.problem.project_public, hidden_script=item.problem.project_hidden,
+            )
         # 事务提交后再入队，避免 worker 读到尚未可见的记录
         transaction.on_commit(
             lambda sid=submission.id: _enqueue_judge(sid)
@@ -391,6 +414,7 @@ def _submission_brief(submission, with_code=False):
         "examId": submission.exam_id,
         "problemId": submission.problem_id,
         "problemTitle": submission.problem.title,
+        "hasProject": getattr(submission, "project", None) is not None,
         "username": submission.student.username,
         "nickname": submission.student.nickname,
         "language": submission.language,
@@ -411,7 +435,7 @@ def _submission_brief(submission, with_code=False):
 
 def exam_submissions(exam, problem_id=None):
     """管理端：本场考试的提交记录（默认不含代码正文，前端点开再看）"""
-    queryset = exam.submissions.select_related("student", "problem")
+    queryset = exam.submissions.select_related("student", "problem", "project").defer("project__archive")
     if problem_id:
         queryset = queryset.filter(problem_id=problem_id)
     return [_submission_brief(s) for s in queryset]
@@ -421,5 +445,5 @@ def my_submissions(student, exam):
     """学生侧：我在本场考试的提交记录（含代码正文）"""
     return [
         _submission_brief(s, with_code=True)
-        for s in exam.submissions.filter(student=student).select_related("student", "problem")
+        for s in exam.submissions.filter(student=student).select_related("student", "problem", "project").defer("project__archive")
     ]

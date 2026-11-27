@@ -5,10 +5,11 @@ import json
 import logging
 
 from celery import shared_task
+from django.core.cache import caches
 from django.db import transaction
 from django.utils import timezone
 
-from exam.models import ExamProblem, Submission, SubmissionCase
+from exam.models import ExamProblem, ProjectSubmission, Submission, SubmissionCase
 from judge.constants import (
     STATUS_FAILED,
     STATUS_JUDGED,
@@ -16,6 +17,9 @@ from judge.constants import (
     STATUS_PENDING,
     VERDICT_SYSTEM_ERROR,
 )
+from judge.ftp import judge_ftp
+from judge.project import read_project
+from judge.project_scoring import judge_project, project_preview
 from judge.languages import normalize_language
 from judge.sandbox import CaseSpec, run_sandbox
 from judge.scoring import summarize
@@ -27,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 COMPILE_OUTPUT_LIMIT = 8192
 EXCERPT_LIMIT = 2048
+SAMPLE_RUN_QUEUE_TIMEOUT = 60
+SAMPLE_RUN_RESULT_TTL = 300
+SAMPLE_RUN_LOCK_TTL = SAMPLE_RUN_QUEUE_TIMEOUT + 10
+SAMPLE_RUN_EXECUTION_TTL = 130
 
 
 @shared_task(bind=True, time_limit=600, soft_time_limit=570)
@@ -98,6 +106,15 @@ def _build_case_specs(samples):
 
 def _judge(submission):
     """执行一次判题；异常由调用方转成 failed 状态。"""
+    project = ProjectSubmission.objects.filter(submission=submission).first()
+    if project is not None:
+        if project.profile == Problem.JUDGE_SCRIPT:
+            judge_project(submission, project)
+        else:
+            judge_ftp(submission, project)
+        record_audit(submission.student, "submission.judged", f"{submission.id} 工程题评测完成")
+        return
+
     problem = submission.problem
     if problem.type == Problem.TYPE_ENGINEERING:
         if not hasattr(problem, "project_bundle"):
@@ -251,7 +268,7 @@ def _judge_project(submission):
                  f"{submission.id} project {score}分，待复核={pending}")
 
 
-@shared_task(bind=True, acks_late=True)
+@shared_task(bind=True, acks_late=True, soft_time_limit=155, time_limit=165)
 def judge_submission(self, submission_id):
     """
     判题任务入口。
@@ -275,6 +292,57 @@ def judge_submission(self, submission_id):
         _judge(submission)
     except Exception as exc:  # noqa: BLE001 - 判题失败要落状态，不能让任务静默
         logger.exception("判题失败 submission=%s", submission_id)
-        _mark_failed(submission, str(exc))
+        _mark_failed(submission, "工程评分脚本运行失败，请联系教师核对配置"
+                     if submission.problem.type == Problem.TYPE_ENGINEERING else str(exc))
 
     return {"submissionId": submission_id}
+
+
+@shared_task(ignore_result=True, acks_late=False)
+def run_sample_tests(run_key, lock_key, problem_id, code):
+    """仅运行公开样例，把预览结果写入短期缓存。"""
+    cache = caches["sample_runs"]
+    queued = cache.get(run_key)
+    if not queued:
+        return
+
+    cache.touch(lock_key, SAMPLE_RUN_EXECUTION_TTL)
+    cache.set(run_key, {"status": "running"}, SAMPLE_RUN_EXECUTION_TTL)
+    try:
+        problem = Problem.objects.get(pk=problem_id)
+        if "archive" in queued:
+            outcome = project_preview(read_project(queued["archive"]), queued["script"], problem.memory_limit_mb)
+            cache.set(run_key, outcome, SAMPLE_RUN_RESULT_TTL)
+            cache.delete(lock_key)
+            return
+        specs = _build_case_specs(problem.samples.filter(is_sample=True).order_by("id"))
+        result = run_sandbox(
+            language_key=problem.language,
+            code=code,
+            cases=specs,
+            time_limit_ms=problem.time_limit_ms,
+            memory_limit_mb=problem.memory_limit_mb,
+            output_limit_kb=problem.output_limit_kb,
+            compile_only=not specs,
+        )
+        cases = [{
+            "index": spec.index,
+            "name": spec.name,
+            "verdict": item["verdict"],
+            "timeMs": item["time_ms"],
+            "expectedOutput": _truncate(spec.expected_output, EXCERPT_LIMIT),
+            "outputExcerpt": _truncate(item.get("output_excerpt"), EXCERPT_LIMIT),
+            "errorExcerpt": _truncate(item.get("error_excerpt"), EXCERPT_LIMIT),
+        } for spec, item in zip(specs, sorted(result.cases, key=lambda item: item["index"]))]
+        outcome = {
+            "status": "completed",
+            "compileOk": result.compile_ok,
+            "compileOutput": _truncate(result.compile_output, COMPILE_OUTPUT_LIMIT),
+            "cases": cases,
+        }
+    except Exception:
+        logger.exception("公开样例运行失败 problem=%s", problem_id)
+        outcome = {"status": "failed", "message": "运行服务暂时不可用，请稍后重试。"}
+
+    cache.set(run_key, outcome, SAMPLE_RUN_RESULT_TTL)
+    cache.delete(lock_key)

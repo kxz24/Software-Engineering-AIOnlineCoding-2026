@@ -1,155 +1,147 @@
-# 清软论坛容器化部署编排
-#
-# 在 backend 目录下执行：
-#   docker compose up -d --build
-#
-# 服务拓扑：
-#   nginx ──(web_network)──> app ──(db_network)──> mysql
-#   nginx 与 mysql 不在同一个网络中，因此 nginx 容器无法访问数据库容器。
-#   只有 nginx 把端口映射到宿主机（8000），其余服务仅供容器间访问。
+name: aicoding
+
+x-backend: &backend
+  image: aicoding-backend:local
+  build:
+    context: ..
+    dockerfile: backend/Dockerfile
+    target: backend
+  environment: &backend-env
+    DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in backend/.env}
+    JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in backend/.env}
+    DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+    DJANGO_SECURE_COOKIES: ${DJANGO_SECURE_COOKIES:-0}
+    MYSQL_DATABASE: aicoding
+    MYSQL_USER: aicoding
+    MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in backend/.env}
+    CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in backend/.env}@redis:6379/0
+    PROJECT_JUDGE_IMAGE: ${PROJECT_JUDGE_IMAGE:-aicoding-project-judge:latest}
+    PROJECT_JUDGE_RUNTIMES_JSON: '${PROJECT_JUDGE_RUNTIMES_JSON:-{}}'
+    PROJECT_MANAGED_BASE_IMAGE: ${PROJECT_MANAGED_BASE_IMAGE:-python:3.11-slim}
+  networks:
+    - data
 
 services:
   mysql:
-    image: mysql:8.1
-    container_name: mysql
-    restart: always
+    image: mysql:8.4
+    restart: unless-stopped
     environment:
-      - MYSQL_ROOT_PASSWORD=2024013307
-      - MYSQL_DATABASE=thss
-      - TZ=Asia/Shanghai
-    # MySQL 镜像默认时区为 UTC、字符集为 latin1，这里统一调整为东八区与 utf8mb4，
-    # 否则中文标题与正文会出现乱码
-    command: ['mysqld', '--character-set-server=utf8mb4', '--collation-server=utf8mb4_unicode_ci']
+      MYSQL_DATABASE: aicoding
+      MYSQL_USER: aicoding
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in backend/.env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in backend/.env}
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
     volumes:
-      # 数据库文件持久化到宿主机，容器重建后数据不丢失
-      - /home/ubuntu/mysql:/var/lib/mysql
+      - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD"]
-      interval: 10s
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql --protocol=TCP -h 127.0.0.1 -u \"$$MYSQL_USER\" \"$$MYSQL_DATABASE\" -e 'SELECT 1'"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 24
     networks:
-      - db_network
-
-  app:
-    build:
-      # 构建上下文为仓库根目录，这样 Dockerfile 才能同时拿到 frontend/ 与 backend/
-      context: ..
-      dockerfile: backend/Dockerfile
-      target: app
-    container_name: app
-    restart: always
-    # 必须显式指定 DJANGO_SETTINGS_MODULE：app/wsgi.py 里用的是
-    # os.environ.setdefault(...)，若不设置则会退回测试用的 app.settings
-    # （SQLite 数据库），导致后端连不上 MySQL 而不会报错
-    environment:
-      - DJANGO_SETTINGS_MODULE=app.settings_prod
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      # AI 助教：默认 mock；在 backend/.env 填写真实配置后由 compose 注入
-      # （.env 与镜像构建上下文均已排除，不会打进镜像）
-      - AGENT_PROVIDER=${AGENT_PROVIDER:-mock}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
-      - AGENT_MODEL=${AGENT_MODEL:-deepseek-chat}
-      - AGENT_PROJECT_HARNESS_ENABLED=${AGENT_PROJECT_HARNESS_ENABLED:-0}
-    # 等 MySQL 健康检查通过（数据库完成初始化）之后再启动，避免连接被拒绝
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    # 按「部署」章节的指引：先做数据库迁移，再用 Gunicorn 启动应用。
-    # 仓库里没有迁移文件（backend/.gitignore 忽略了 **/migrations/*.py），
-    # 因此必须先 makemigrations 才能建表
-    command: >
-      bash -c "export DJANGO_SETTINGS_MODULE=app.settings_prod &&
-      python manage.py makemigrations app user problem exam agent practice &&
-      python manage.py migrate &&
-      exec gunicorn -w4 -b 0.0.0.0:8000 --timeout 300 --log-level=debug app.wsgi"
-    expose:
-      - "8000"
-    networks:
-      # 同时接入两个网络：既能接收 Nginx 的请求，又能连接数据库
-      - web_network
-      - db_network
+      - data
 
   redis:
     image: redis:7-alpine
-    container_name: redis
-    restart: always
-    # 安全要求：不要添加 ports 映射。Redis 只在内部网络供 app/judge 访问；
-    # 需要从宿主机调试时用 -p 127.0.0.1:6379:6379 并设置 requirepass。
-    networks:
-      - db_network
-
-  # 判题 worker：消费 Redis 队列，并通过宿主 Docker daemon 启动一次性沙箱容器。
-  # 注意：挂载 docker.sock 等价于宿主机 root 权限，只应放在受信任的判题服务里。
-  judge:
-    build:
-      context: ..
-      dockerfile: backend/Dockerfile
-      target: app
-    container_name: judge
-    restart: always
+    restart: unless-stopped
     environment:
-      - DJANGO_SETTINGS_MODULE=app.settings_prod
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - JUDGE_IMAGE=aicoding-judge:latest
-      - PROJECT_JUDGE_IMAGE=aicoding-project-judge:latest
-      - PROJECT_JUDGE_RUNTIMES_JSON=${PROJECT_JUDGE_RUNTIMES_JSON:-{}}
-      - PROJECT_MANAGED_BASE_IMAGE=${PROJECT_MANAGED_BASE_IMAGE:-python:3.11-slim}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in backend/.env}
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - data
+
+  migrate:
+    <<: *backend
     depends_on:
       mysql:
         condition: service_healthy
-      redis:
-        condition: service_started
-      app:
-        condition: service_started
-    command: >
-      bash -c "celery -A app worker -l info -c 2 --max-tasks-per-child=50"
+    command:
+      - sh
+      - -ec
+      - |
+        touch /deploy-data/aicoding_migrations/__init__.py
+        python manage.py makemigrations user problem exam agent practice --noinput
+        python manage.py migrate --noinput
+        python manage.py collectstatic --noinput
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - migrations:/deploy-data/aicoding_migrations
+      - django_static:/django-static
+
+  app:
+    <<: *backend
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+      AGENT_PROVIDER: ${AGENT_PROVIDER:-mock}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      AGENT_MODEL: ${AGENT_MODEL:-deepseek-chat}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - migrations:/deploy-data/aicoding_migrations:ro
     networks:
-      - web_network
-      - db_network
+      - web
+      - data
+
+  judge:
+    <<: *backend
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "app", "worker", "-l", "info", "-c", "2", "--max-tasks-per-child=50"]
+    volumes:
+      - migrations:/deploy-data/aicoding_migrations:ro
+      - /var/run/docker.sock:/var/run/docker.sock
 
   agent-worker:
+    <<: *backend
+    image: aicoding-agent-worker:local
     build:
       context: ..
       dockerfile: backend/Dockerfile
       target: agent_worker
-    restart: always
+    restart: unless-stopped
     environment:
-      - DJANGO_SETTINGS_MODULE=app.settings_prod
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
-      - AGENT_MODEL=${AGENT_MODEL:-deepseek-chat}
-      - AGENT_HARNESS_MODEL=${AGENT_HARNESS_MODEL:-DeepSeek-V4.1-Flash-1017}
-      - AGENT_HARNESS_MAX_STEPS=${AGENT_HARNESS_MAX_STEPS:-20}
-      - AGENT_HARNESS_WALL_SECONDS=${AGENT_HARNESS_WALL_SECONDS:-600}
-      - PROJECT_JUDGE_IMAGE=aicoding-project-judge:latest
+      <<: *backend-env
+      AGENT_PROVIDER: ${AGENT_PROVIDER:-mock}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      AGENT_MODEL: ${AGENT_MODEL:-deepseek-chat}
+      AGENT_HARNESS_MODEL: ${AGENT_HARNESS_MODEL:-DeepSeek-V4.1-Flash-1017}
+      AGENT_HARNESS_MAX_STEPS: ${AGENT_HARNESS_MAX_STEPS:-20}
+      AGENT_HARNESS_WALL_SECONDS: ${AGENT_HARNESS_WALL_SECONDS:-600}
+      PROJECT_JUDGE_IMAGE: ${PROJECT_JUDGE_IMAGE:-aicoding-project-judge:latest}
     depends_on:
-      mysql:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
-        condition: service_started
-    command: celery -A app worker -Q agent -l info -c 3 --max-tasks-per-child=10
+        condition: service_healthy
+    command: ["celery", "-A", "app", "worker", "-Q", "agent", "-l", "info", "-c", "3", "--max-tasks-per-child=10"]
     volumes:
+      - migrations:/deploy-data/aicoding_migrations:ro
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      - db_network
+      - data
 
-  # 判题沙箱基础镜像的构建入口（只在需要时显式构建）：
-  #   docker compose --profile build build judge-base
   judge-base:
     image: aicoding-judge:latest
+    profiles: ["build"]
     build:
       context: judge
-      dockerfile: Dockerfile
-    profiles: ["build"]
-    restart: "no"
-    command: ["true"]
 
   project-judge-base:
     image: aicoding-project-judge:latest
@@ -161,28 +153,27 @@ services:
     command: ["true"]
 
   nginx:
-    # 使用 latest 版本的 Nginx；构建产物同样打成这个 tag，
-    # 因此部署时必须带 --build（docker compose up -d --build），
-    # 否则可能直接复用本地的同名镜像而跳过构建
-    image: nginx:latest
+    image: aicoding-nginx:local
     build:
       context: ..
       dockerfile: backend/Dockerfile
       target: nginx
-    container_name: nginx
-    restart: always
+    restart: unless-stopped
     depends_on:
       - app
     ports:
-      # 仅此服务对外暴露端口，宿主机 8000 -> 容器 8000
-      - "8000:8000"
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8000}:8000"
+    volumes:
+      - django_static:/django-static:ro
     networks:
-      - web_network
+      - web
 
 networks:
-  # Nginx 与后端应用之间的网络
-  web_network:
-    driver: bridge
-  # 后端应用与数据库之间的网络，Nginx 不在此网络中
-  db_network:
-    driver: bridge
+  web:
+  data:
+
+volumes:
+  mysql_data:
+  redis_data:
+  migrations:
+  django_static:

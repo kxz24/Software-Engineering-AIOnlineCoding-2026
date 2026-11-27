@@ -240,6 +240,7 @@ async function request<T>(
         method?: string;
         body?: unknown;
         query?: Record<string, string | undefined>;
+        signal?: AbortSignal;
     } = {}
 ): Promise<T> {
     if (typeof fetch !== "function") {
@@ -260,16 +261,18 @@ async function request<T>(
             fullUrl += (url.indexOf("?") >= 0 ? "&" : "?") + queryString;
         }
     }
+    const form = options.body instanceof FormData ? options.body : undefined;
     let response: Response;
     try {
         response = await fetch(fullUrl, {
             method: options.method || "GET",
             mode: "cors",
             headers: {
-                "Content-Type": "application/json",
+                ...(form ? {} : { "Content-Type": "application/json" }),
                 "Authorization": getToken() || "",
             },
-            body: options.body === undefined ? undefined : JSON.stringify(options.body),
+            body: form || (options.body === undefined ? undefined : JSON.stringify(options.body)),
+            signal: options.signal,
         });
     } catch (e) {
         throw new ApiError(NetworkErrorMessage, 0);
@@ -363,6 +366,7 @@ export interface ProblemSummary {
     language: string;
     difficulty: "easy" | "medium" | "hard";
     image: string;
+    judgeProfile?: string;
     timeLimitMs: number;
     memoryLimitMb: number;
     outputLimitKb: number;
@@ -385,6 +389,7 @@ export interface SamplePayload {
 
 /** 题目详情：题面 + 初始代码 + 全部用例（教师 / 管理员可见） */
 export interface ProblemDetail extends ProblemSummary {
+    projectFiles?: Partial<Record<"starterArchive" | "workspaceTemplate" | "publicScript" | "hiddenScript", boolean>>;
     description: string;
     starterCode: string;
     publicFiles?: Record<string, string> | null;
@@ -408,6 +413,16 @@ export function fetchProblems(query: ProblemListQuery = {}): Promise<{ problems:
 /** 题目详情 */
 export function fetchProblem(problemId: number): Promise<ProblemDetail> {
     return request(Urls.problemDetail(problemId));
+}
+
+type ProjectUploads = Partial<Record<"starterArchive" | "workspaceTemplate" | "publicScript" | "hiddenScript", File>>;
+
+function problemBody(payload: unknown, files?: ProjectUploads): unknown {
+    if (!files) return payload;
+    const form = new FormData();
+    form.append("payload", JSON.stringify(payload));
+    Object.entries(files).forEach(([key, file]) => { if (file) form.append(key, file); });
+    return form;
 }
 
 /** 上传工程题包；题目说明与初始文件由 ZIP 内 project.json/public/ 提供。 */
@@ -441,14 +456,15 @@ export function createProblem(payload: {
     language: string;
     difficulty: string;
     image: string;
+    judgeProfile?: string;
     starterCode: string;
     timeLimitMs?: number;
     memoryLimitMb?: number;
     outputLimitKb?: number;
     practiceEnabled?: boolean;
     samples: SamplePayload[];
-}): Promise<ProblemDetail> {
-    return request(Urls.problems, { method: "POST", body: payload });
+}, files?: ProjectUploads): Promise<ProblemDetail> {
+    return request(Urls.problems, { method: "POST", body: problemBody(payload, files) });
 }
 
 /** 编辑题目；samples 缺省表示不改用例 */
@@ -461,15 +477,17 @@ export function updateProblem(
         language?: string;
         difficulty?: string;
         image?: string;
+        judgeProfile?: string;
         starterCode?: string;
         timeLimitMs?: number;
         memoryLimitMb?: number;
         outputLimitKb?: number;
         practiceEnabled?: boolean;
         samples?: SamplePayload[];
-    }
+    },
+    files?: ProjectUploads
 ): Promise<ProblemDetail> {
-    return request(Urls.problemDetail(problemId), { method: "PATCH", body: payload });
+    return request(Urls.problemDetail(problemId), { method: "PATCH", body: problemBody(payload, files) });
 }
 
 /** 删除题目（级联删除用例） */
@@ -596,6 +614,7 @@ export interface SubmissionResultFields {
 }
 
 export interface ExamSubmissionEntry extends SubmissionResultFields {
+    hasProject?: boolean;
     id: number;
     examId: number;
     problemId: number;
@@ -647,6 +666,8 @@ export interface StudentProblem {
     difficulty: string;
     description: string;
     starterCode: string;
+    judgeProfile?: string;
+    hasStarterArchive?: boolean;
     publicFiles?: Record<string, string> | null;
     samples: StudentSample[];
 }
@@ -669,6 +690,7 @@ export interface StudentExamDetail {
 
 /** 学生侧提交记录（含代码正文） */
 export interface MySubmission extends SubmissionResultFields {
+    hasProject?: boolean;
     id: number;
     examId: number;
     problemId: number;
@@ -681,6 +703,8 @@ export interface MySubmission extends SubmissionResultFields {
 
 /** 单个测试用例的判定结果 */
 export interface SubmissionCase {
+    earnedPoints?: number;
+    maxPoints?: number;
     name: string;
     isSample: boolean;
     verdict: string;
@@ -688,6 +712,57 @@ export interface SubmissionCase {
     memoryKb: number;
     outputExcerpt?: string;
     errorExcerpt?: string;
+}
+
+export interface SampleRunCase {
+    earnedPoints?: number;
+    maxPoints?: number;
+    index: number;
+    name: string;
+    verdict: string;
+    timeMs: number;
+    expectedOutput: string;
+    outputExcerpt: string;
+    errorExcerpt: string;
+}
+
+export type SampleRunResult =
+    | { status: "queued" | "running" }
+    | { status: "completed"; compileOk: boolean; compileOutput: string; cases: SampleRunCase[] }
+    | { status: "failed"; message: string };
+
+export interface ProjectWorkspace {
+    files: { path: string; content: string; revision: number }[];
+    fixedFiles: string[];
+    version: number;
+}
+
+export interface WorkspaceSource {
+    workspaceRevisions: Record<string, number>;
+    workspaceVersion: number;
+}
+
+export type SubmissionSource = string | File | WorkspaceSource;
+
+export function fetchProjectWorkspace(examId: number, problemId: number): Promise<ProjectWorkspace> {
+    return request(Urls.projectWorkspace(examId, problemId));
+}
+
+export function saveProjectWorkspace(examId: number, problemId: number, files: Record<string, string>,
+                                     source: WorkspaceSource): Promise<ProjectWorkspace> {
+    return request(Urls.projectWorkspace(examId, problemId), { method: "PUT", body: { files, ...source } });
+}
+
+export function startSampleRun(
+    examId: number, problemId: number, code: SubmissionSource, signal: AbortSignal
+): Promise<{ runId: string }> {
+    return request(Urls.sampleRuns(examId, problemId), { method: "POST", body: submissionBody(code), signal });
+}
+
+export function fetchSampleRun(
+    examId: number, problemId: number, runId: string, signal: AbortSignal
+): Promise<SampleRunResult> {
+    return request(`${Urls.sampleRuns(examId, problemId)}/${runId}`, { signal });
 }
 
 /** 单条提交详情（含用例结果） */
@@ -734,17 +809,25 @@ export function fetchMyProblemSubmissions(
     return request(Urls.mySubmission(examId, problemId));
 }
 
+function submissionBody(code: SubmissionSource, language?: string) {
+    if (typeof code === "string") return { code, language };
+    if (!(code instanceof File)) return code;
+    const form = new FormData();
+    form.append("archive", code);
+    return form;
+}
+
 /** 提交代码（立即返回 pending，判题结果通过 fetchSubmission 轮询） */
 export function submitCode(
     examId: number,
     problemId: number,
-    code: string,
-      language?: string,
-      files?: Record<string, string>
+    code: SubmissionSource,
+    language?: string,
+    files?: Record<string, string>
 ): Promise<{ submission: { id: number; problemId: number; status: string; created: string }; used: number; remaining: number }> {
     return request(Urls.mySubmission(examId, problemId), {
         method: "POST",
-          body: files ? { files, language } : { code, language },
+        body: files ? { files, language } : submissionBody(code, language),
     });
 }
 
@@ -766,4 +849,29 @@ export function setToken(token: string) {
 /** 清除令牌 */
 export function removeToken() {
     localStorage.removeItem("token");
+}
+
+
+export function downloadProjectArchive(submissionId: number): Promise<void> {
+    return downloadFile(Urls.submissionDetail(submissionId) + "/archive", `submission-${submissionId}.zip`);
+}
+
+export function downloadProjectAsset(examId: number, problemId: number, asset: "starter.zip" | "public.py"): Promise<void> {
+    return downloadFile(Urls.projectAsset(examId, problemId, asset), asset);
+}
+
+async function downloadFile(url: string, filename: string): Promise<void> {
+    const response = await fetch(url, {
+        headers: { Authorization: getToken() || "" },
+    });
+    if (!response.ok) {
+        const json = await readJson(response);
+        throw new ApiError(json.message || "下载工程包失败", response.status);
+    }
+    const href = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = filename;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(href), 1000);
 }

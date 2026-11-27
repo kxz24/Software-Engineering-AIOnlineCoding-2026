@@ -1,16 +1,39 @@
+import logging
+from uuid import uuid4
+
+from django.conf import settings
+from django.core.cache import caches
+from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from problem.models import Problem
+from redis.exceptions import RedisError
 
+from exam.project_workspace import (
+    WorkspaceConflict, open_workspace, save_workspace, workspace_archive, workspace_payload,
+)
+from judge.languages import LANGUAGES
+from judge.project import MAX_ARCHIVE_BYTES, read_project
+from judge.tasks import (
+    SAMPLE_RUN_LOCK_TTL,
+    SAMPLE_RUN_QUEUE_TIMEOUT,
+    run_sample_tests,
+)
+from problem.models import Problem
 from user.models import User
 from utils.jwt import login_required, role_required
 
 from . import controllers
 from .models import Exam
+
+logger = logging.getLogger(__name__)
+
+
+def _sample_run_key(student_id, exam_id, problem_id, run_id):
+    return f"run:{student_id}:{exam_id}:{problem_id}:{run_id}"
 
 
 def _parse_time(value):
@@ -334,6 +357,164 @@ class MyExamSubmissionsView(APIView):
         )
 
 
+def _uploaded_project(request, exam, problem_id):
+    content = request.data
+    if isinstance(content, dict) and "workspaceRevisions" in content:
+        return workspace_archive(exam, problem_id, request.user, content["workspaceRevisions"],
+                                 content.get("workspaceVersion"))
+    upload = request.FILES.get("archive")
+    if upload is None:
+        return None
+    if upload.size > MAX_ARCHIVE_BYTES:
+        raise ValueError("工程包不能超过 16 MB")
+    archive = upload.read()
+    read_project(archive)
+    return archive
+
+
+class MyProjectWorkspaceView(APIView):
+    @login_required
+    def get(self, request, exam_id, problem_id):
+        return self._handle(request, exam_id, problem_id)
+
+    @login_required
+    def put(self, request, exam_id, problem_id):
+        return self._handle(request, exam_id, problem_id, save=True)
+
+    def _handle(self, request, exam_id, problem_id, *, save=False):
+        exam, ok = _load_exam(exam_id)
+        if not ok or exam.status == Exam.STATUS_DRAFT:
+            return Response({"message": "考试不存在"}, status=404)
+        if request.user.role != User.ROLE_STUDENT or not controllers.is_candidate(exam, request.user):
+            return Response({"message": "仅本场考生可访问工作区"}, status=403)
+        phase = controllers._student_status(exam)
+        if phase == "upcoming" or (save and phase != "ongoing"):
+            return Response({"message": "仅可在考试进行期间编辑工程"}, status=403)
+        problem = Problem.objects.filter(
+            pk=problem_id, problem_exams__exam=exam,
+            type=Problem.TYPE_ENGINEERING, judge_profile=Problem.JUDGE_SCRIPT,
+        ).defer("project_starter", "project_public", "project_hidden").first()
+        if problem is None:
+            return Response({"message": "本场考试没有可用的工程工作区"}, status=404)
+        try:
+            workspace = open_workspace(exam, problem, request.user)
+            if save:
+                body = request.data if isinstance(request.data, dict) else {}
+                return Response(save_workspace(workspace, body.get("files"), body.get("workspaceRevisions"),
+                                               body.get("workspaceVersion")))
+            return Response(workspace_payload(workspace))
+        except WorkspaceConflict as exc:
+            return Response({"message": str(exc)}, status=409)
+        except ValueError as exc:
+            return Response({"message": str(exc)}, status=400)
+
+
+class MyProjectAssetView(APIView):
+    @login_required
+    def get(self, request, exam_id, problem_id, asset):
+        exam, ok = _load_exam(exam_id)
+        if not ok or exam.status == Exam.STATUS_DRAFT:
+            return Response({"message": "考试不存在"}, status=404)
+        if not controllers.is_candidate(exam, request.user):
+            return Response({"message": "不在本场考试的名单中"}, status=403)
+        field = {"starter.zip": "project_starter", "public.py": "project_public"}.get(asset)
+        if field is None:
+            return Response({"message": "附件不存在"}, status=404)
+        problem = Problem.objects.filter(
+            pk=problem_id, problem_exams__exam=exam, judge_profile=Problem.JUDGE_SCRIPT,
+        ).values_list(field, flat=True).first()
+        if not problem:
+            return Response({"message": "附件不存在"}, status=404)
+        data = problem if isinstance(problem, str) else bytes(problem)
+        response = HttpResponse(data, content_type="application/octet-stream")
+        response["Content-Disposition"] = f'attachment; filename="{asset}"'
+        response["Cache-Control"] = "private, no-store"
+        return response
+
+
+class MySampleRunCreateView(APIView):
+    """试运行当前答案，仅使用公开样例。"""
+
+    @login_required
+    def post(self, request, exam_id, problem_id):
+        exam, ok = _load_exam(exam_id)
+        if not ok:
+            return Response({"message": "考试不存在"}, status=status.HTTP_404_NOT_FOUND)
+        if request.user.role != User.ROLE_STUDENT or not controllers.is_candidate(exam, request.user):
+            return Response({"message": "仅本场考试的考生可运行代码"}, status=status.HTTP_403_FORBIDDEN)
+        if exam.status != Exam.STATUS_PUBLISHED or controllers._student_status(exam) != "ongoing":
+            return Response({"message": "仅可在考试进行期间运行代码"}, status=status.HTTP_400_BAD_REQUEST)
+
+        item = exam.exam_problems.filter(problem_id=problem_id).select_related("problem").first()
+        if item is None:
+            return Response({"message": "本场考试没有这道题"}, status=status.HTTP_404_NOT_FOUND)
+        problem = item.problem
+        queued = {"status": "queued"}
+        code = None
+        if problem.judge_profile == Problem.JUDGE_SCRIPT and problem.type == Problem.TYPE_ENGINEERING:
+            try:
+                queued["archive"] = _uploaded_project(request, exam, problem_id)
+            except WorkspaceConflict as exc:
+                return Response({"message": str(exc)}, status=409)
+            except ValueError as exc:
+                return Response({"message": str(exc)}, status=400)
+            if queued["archive"] is None or not problem.project_public:
+                return Response({"message": "请上传工程包，且题目须有公开评分脚本"}, status=400)
+            queued["script"] = problem.project_public
+        else:
+            config = LANGUAGES.get(problem.language)
+            if problem.type != Problem.TYPE_ALGORITHM or config is None:
+                return Response({"message": "本题暂不支持试运行"}, status=400)
+            if not config.compile and not problem.samples.filter(is_sample=True).exists():
+                return Response({"message": "本题没有可运行的公开样例"}, status=400)
+            code = request.data.get("code") if isinstance(request.data, dict) else None
+            if not isinstance(code, str) or not code.strip():
+                return Response({"message": "请先编写代码"}, status=400)
+            if len(code) > 200_000:
+                return Response({"message": "代码过长（上限 200 000 字符）"}, status=400)
+
+        if not settings.JUDGE_ENQUEUE_ENABLED:
+            return Response({"message": "运行服务暂未开启"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        run_id = uuid4()
+        cache = caches["sample_runs"]
+        run_key = _sample_run_key(request.user.id, exam_id, problem_id, run_id)
+        lock_key = f"active:{request.user.id}"
+        try:
+            if not cache.add(lock_key, True, SAMPLE_RUN_LOCK_TTL):
+                return Response({"message": "已有一次运行正在处理，请稍候"}, status=status.HTTP_409_CONFLICT)
+            try:
+                cache.set(run_key, queued, SAMPLE_RUN_QUEUE_TIMEOUT + 5)
+                run_sample_tests.apply_async(
+                    args=(run_key, lock_key, problem_id, code),
+                    expires=SAMPLE_RUN_QUEUE_TIMEOUT,
+                    retry=False,
+                )
+            except Exception:
+                cache.delete_many([run_key, lock_key])
+                raise
+        except Exception:
+            logger.exception("公开样例运行入队失败 problem=%s", problem_id)
+            return Response({"message": "运行服务暂时不可用，请稍后重试"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response({"runId": str(run_id)}, status=status.HTTP_202_ACCEPTED)
+
+
+class MySampleRunDetailView(APIView):
+    """查询本人试运行的状态和诊断。"""
+
+    @login_required
+    def get(self, request, exam_id, problem_id, run_id):
+        key = _sample_run_key(request.user.id, exam_id, problem_id, run_id)
+        try:
+            result = caches["sample_runs"].get(key)
+        except RedisError:
+            return Response({"message": "暂时无法读取运行结果，请稍后重试"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if result is None:
+            return Response({"message": "运行已超时或结果已过期，请重新运行"}, status=status.HTTP_404_NOT_FOUND)
+        if result.get("status") in {"queued", "running"}:
+            return Response({"status": result["status"]})
+        return Response(result)
+
+
 class MySubmissionView(APIView):
     """学生侧：对某道题提交代码 / 查看我的提交历史"""
 
@@ -360,10 +541,15 @@ class MySubmissionView(APIView):
                     "language": {"type": "string", "description": "语言，缺省用题目语言"},
                 },
                 "required": ["code"],
-            }
+            },
+            "multipart/form-data": {
+                "type": "object",
+                "properties": {"archive": {"type": "string", "format": "binary"}},
+                "required": ["archive"],
+            },
         },
-        description="提交代码。当前只收卷存档（status=pending），判题服务接入后回填结果",
-        summary="提交代码",
+        description="提交代码或工程源码包，由后台异步判题。",
+        summary="正式提交",
     )
     @login_required
     def post(self, request, *args, **kwargs):
@@ -371,6 +557,12 @@ class MySubmissionView(APIView):
         if not ok:
             return Response({"message": "考试不存在"}, status=status.HTTP_404_NOT_FOUND)
         content = request.data or {}
+        try:
+            archive = _uploaded_project(request, exam, kwargs.get("problem_id"))
+        except WorkspaceConflict as exc:
+            return Response({"message": str(exc)}, status=409)
+        except ValueError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         problem = Problem.objects.filter(pk=kwargs.get("problem_id")).first()
         if problem and hasattr(problem, "project_bundle"):
             files = content.get("files")
@@ -389,14 +581,16 @@ class MySubmissionView(APIView):
             code = json.dumps({"files": files}, ensure_ascii=False)
         else:
             code = str(content.get("code") or "")
-            if not code.strip():
+            if archive is None and not code.strip():
                 return Response({"message": "代码不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+        if archive is not None:
+            code = ""
         if len(code.encode("utf-8")) > 200_000:
             return Response({"message": "代码过长（上限 200 KB）"}, status=400)
 
         submission, code_status, ok = controllers.create_submission(
             request.user, exam, kwargs.get("problem_id"), code,
-            str(content.get("language") or ""),
+            str(content.get("language") or ""), archive=archive,
         )
         if not ok:
             return Response({"message": submission}, status=code_status)

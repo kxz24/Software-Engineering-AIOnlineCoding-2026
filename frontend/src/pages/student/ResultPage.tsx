@@ -239,7 +239,7 @@ export function ResultPage() {
                                     <div className="card-title">本次提交的代码</div>
                                     <div className="card-sub">
                                         {latest
-                                            ? `${latest.problemTitle} · ${latest.language} · ${formatDateTime(latest.created)}`
+                                            ? `${latest.problemTitle} · ${latest.hasProject ? "工程源码" : latest.language} · ${formatDateTime(latest.created)}`
                                             : "还没有提交记录"}
                                     </div>
                                 </div>
@@ -247,7 +247,9 @@ export function ResultPage() {
                             </div>
                             {latest ? (
                                 <div className="card-body">
-                                    <pre style={CodeBoxStyle}>{latest.code || "（空提交）"}</pre>
+                                    {latest.hasProject || detail?.hasProject ? (
+                                        <p>源码包已存档，成绩由公开和隐藏评分脚本自动计算。</p>
+                                    ) : <pre style={CodeBoxStyle}>{latest.code || "（空提交）"}</pre>}
                                 </div>
                             ) : (
                                 <div className="card-body muted">
@@ -340,7 +342,7 @@ export function ResultPage() {
                                     const meta = verdictMeta(item.verdict);
                                     return (
                                         <tr key={index}>
-                                            <td>{item.name}</td>
+                                            <td>{item.name}{item.maxPoints != null && ` · ${item.earnedPoints}/${item.maxPoints} 分`}</td>
                                             <td>{item.isSample ? "样例" : "隐藏"}</td>
                                             <td><span className={"badge " + meta.tone}>{meta.label}</span></td>
                                             <td>{formatMs(item.timeMs)}</td>

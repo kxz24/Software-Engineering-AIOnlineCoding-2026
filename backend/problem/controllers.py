@@ -40,6 +40,7 @@ def problem_summary(problem):
         "language": problem.language,
         "difficulty": problem.difficulty,
         "image": problem.image,
+        "judgeProfile": problem.judge_profile,
         "timeLimitMs": problem.time_limit_ms,
         "memoryLimitMb": problem.memory_limit_mb,
         "outputLimitKb": problem.output_limit_kb,
@@ -59,6 +60,12 @@ def problem_detail(problem):
         **problem_summary(problem),
         "description": problem.description,
         "starterCode": problem.starter_code,
+        "projectFiles": {
+            "starterArchive": bool(problem.project_starter),
+            "workspaceTemplate": bool(problem.project_template),
+            "publicScript": bool(problem.project_public),
+            "hiddenScript": bool(problem.project_hidden),
+        },
         "publicFiles": problem.project_bundle.public_files if hasattr(problem, "project_bundle") else None,
         "createdBy": problem.created_by.username if problem.created_by else "",
         "samples": [

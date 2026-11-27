@@ -29,6 +29,7 @@ class CaseSpec:
 class SandboxResult:
     compile_output: str
     cases: list
+    compile_ok: bool = True
 
 
 _client = None
@@ -110,13 +111,15 @@ def _parse_runner_output(raw):
     raise SandboxError(f"判题 runner 未返回 JSON：{text[-500:]}")
 
 
-def _wall_limit(time_limit_ms, case_count):
-    per_case = max(20, (time_limit_ms / 1000.0) * case_count * 2 + 20)
-    return min(float(settings.JUDGE_WALL_TIME_LIMIT), per_case)
+def _wall_limit(time_limit_ms, case_count, needs_compile):
+    # 编译本身最多 30 秒，容器还需要时间启动和返回诊断。
+    overhead = 40 if needs_compile else 20
+    budget = (time_limit_ms / 1000.0) * case_count * 2 + overhead
+    return min(float(settings.JUDGE_WALL_TIME_LIMIT), budget)
 
 
 def run_sandbox(language_key, code, cases, time_limit_ms, memory_limit_mb,
-                output_limit_kb):
+                output_limit_kb, *, compile_only=False):
     """
     在一次性 Docker 容器中编译并逐用例运行。
 
@@ -124,7 +127,7 @@ def run_sandbox(language_key, code, cases, time_limit_ms, memory_limit_mb,
     """
     if language_key not in LANGUAGES:
         raise SandboxError(f"不支持的判题语言: {language_key}")
-    if not cases:
+    if not cases and not compile_only:
         raise SandboxError("题目没有测试用例")
 
     config = LANGUAGES[language_key]
@@ -190,7 +193,7 @@ def run_sandbox(language_key, code, cases, time_limit_ms, memory_limit_mb,
             container.start()
             container.put_archive("/sandbox", archive)
             wait_result = container.wait(
-                timeout=_wall_limit(time_limit_ms, len(cases))
+                timeout=_wall_limit(time_limit_ms, len(cases), bool(config.compile))
             )
             exit_code = int((wait_result or {}).get("StatusCode") or 0)
         except Exception as exc:
@@ -205,7 +208,7 @@ def run_sandbox(language_key, code, cases, time_limit_ms, memory_limit_mb,
             payload = _parse_runner_output(stdout)
         except SandboxError:
             # 容器被内核 OOM killer 杀掉时 runner 来不及输出 JSON
-            if exit_code == 137:
+            if exit_code == 137 and cases:
                 return SandboxResult(
                     compile_output="",
                     cases=[{
@@ -230,6 +233,7 @@ def run_sandbox(language_key, code, cases, time_limit_ms, memory_limit_mb,
         return SandboxResult(
             compile_output=str(compile_info.get("output") or ""),
             cases=results,
+            compile_ok=bool(compile_info.get("ok")),
         )
     finally:
         try:
