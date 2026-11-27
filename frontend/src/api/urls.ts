@@ -53,6 +53,9 @@ export const Routes = {
     examReport: (examId: string | number) => `/exams/${examId}/report`,
     /** 成绩报告首页：列出可查看报告的考试 */
     reports: "/reports",
+    /** 学生端自由练习 */
+    practice: "/practice",
+    practiceProblem: (problemId: string | number) => `/practice/${problemId}`,
 
     examManage: "/manage",
     examCreate: "/manage/new",

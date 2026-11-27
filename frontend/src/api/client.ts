@@ -322,6 +322,7 @@ export interface ProblemSummary {
     timeLimitMs: number;
     memoryLimitMb: number;
     outputLimitKb: number;
+    practiceEnabled: boolean;
     sampleCount: number;
     hiddenCount: number;
     updated: string;
@@ -373,6 +374,7 @@ export function createProblem(payload: {
     timeLimitMs?: number;
     memoryLimitMb?: number;
     outputLimitKb?: number;
+    practiceEnabled?: boolean;
     samples: SamplePayload[];
 }): Promise<ProblemDetail> {
     return request(Urls.problems, { method: "POST", body: payload });
@@ -392,6 +394,7 @@ export function updateProblem(
         timeLimitMs?: number;
         memoryLimitMb?: number;
         outputLimitKb?: number;
+        practiceEnabled?: boolean;
         samples?: SamplePayload[];
     }
 ): Promise<ProblemDetail> {

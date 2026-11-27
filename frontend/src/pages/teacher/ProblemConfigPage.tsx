@@ -85,6 +85,7 @@ export function ProblemConfigPage() {
                         timeLimitMs: 2000,
                         memoryLimitMb: 256,
                         outputLimitKb: 1024,
+                        practiceEnabled: true,
                         sampleCount: entry.sampleCount,
                         hiddenCount: entry.hiddenCount,
                         updated: "",

@@ -13,6 +13,8 @@ import { WorkbenchPage } from "./pages/student/WorkbenchPage";
 import { ResultPage } from "./pages/student/ResultPage";
 import { ReportPage } from "./pages/student/ReportPage";
 import { ReportsPage } from "./pages/student/ReportsPage";
+import { PracticeListPage } from "./pages/student/PracticeListPage";
+import { PracticePage } from "./pages/student/PracticePage";
 import { ExamManagePage } from "./pages/teacher/ExamManagePage";
 import { ExamCreatePage } from "./pages/teacher/ExamCreatePage";
 import { ProblemConfigPage } from "./pages/teacher/ProblemConfigPage";
@@ -110,6 +112,10 @@ export function App() {
                    render={() => <RequireRole roles={["student"]}><ExamListPage/></RequireRole>}/>
             <Route exact path={Routes.reports}
                    render={() => <RequireRole roles={["student"]}><ReportsPage/></RequireRole>}/>
+            <Route exact path={Routes.practice}
+                   render={() => <RequireRole roles={["student"]}><PracticeListPage/></RequireRole>}/>
+            <Route exact path="/practice/:problemId"
+                   render={() => <RequireRole roles={["student"]}><PracticePage/></RequireRole>}/>
             <Route exact path="/exams/:examId/precheck"
                    render={() => <RequireRole roles={["student"]}><PrecheckPage/></RequireRole>}/>
             <Route exact path="/exams/:examId/workbench"

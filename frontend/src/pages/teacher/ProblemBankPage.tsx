@@ -60,6 +60,7 @@ interface ProblemForm {
     timeLimitMs: number;
     memoryLimitMb: number;
     outputLimitKb: number;
+    practiceEnabled: boolean;
     samples: SampleForm[];
 }
 
@@ -75,6 +76,7 @@ const EmptyForm: ProblemForm = {
     timeLimitMs: 2000,
     memoryLimitMb: 256,
     outputLimitKb: 1024,
+    practiceEnabled: true,
     samples: [],
 };
 
@@ -161,6 +163,7 @@ export function ProblemBankPage() {
                     timeLimitMs: detail.timeLimitMs,
                     memoryLimitMb: detail.memoryLimitMb,
                     outputLimitKb: detail.outputLimitKb,
+                    practiceEnabled: detail.practiceEnabled !== false,
                     samples: detail.samples.map(sample => ({
                         name: sample.name,
                         input: sample.input,
@@ -207,6 +210,7 @@ export function ProblemBankPage() {
             timeLimitMs: Number(form.timeLimitMs),
             memoryLimitMb: Number(form.memoryLimitMb),
             outputLimitKb: Number(form.outputLimitKb),
+            practiceEnabled: form.practiceEnabled,
             samples: form.samples,
         };
         try {
@@ -373,6 +377,16 @@ export function ProblemBankPage() {
                                 </select>
                             </div>
                             <div className="field">
+                                <div className="label">自由练习</div>
+                                <label className="muted"
+                                       style={{ display: "flex", alignItems: "center", gap: 6, height: 30, fontSize: 11.5 }}>
+                                    <input type="checkbox"
+                                           checked={form.practiceEnabled}
+                                           onChange={event => setForm({ ...form, practiceEnabled: event.target.checked })}/>
+                                    开放给学生自主练习
+                                </label>
+                            </div>
+                            <div className="field">
                                 <div className="label">单用例时限（毫秒）</div>
                                 <input className="input"
                                        type="number"
@@ -523,17 +537,18 @@ export function ProblemBankPage() {
                         <th>难度</th>
                         <th>样例</th>
                         <th>隐藏</th>
+                        <th>练习</th>
                         <th>更新时间</th>
                         <th>操作</th>
                     </tr>
                     </thead>
                     <tbody>
                     {loading && (
-                        <tr><td colSpan={8} style={{ color: "#94a3b8" }}>加载中…</td></tr>
+                        <tr><td colSpan={9} style={{ color: "#94a3b8" }}>加载中…</td></tr>
                     )}
                     {!loading && problems.length === 0 && (
                         <tr>
-                            <td colSpan={8} style={{ color: "#94a3b8" }}>
+                            <td colSpan={9} style={{ color: "#94a3b8" }}>
                                 题库还是空的，点击右上角「新建题目」开始命题
                             </td>
                         </tr>
@@ -550,6 +565,11 @@ export function ProblemBankPage() {
                             </td>
                             <td>{problem.sampleCount}</td>
                             <td>{problem.hiddenCount}</td>
+                            <td>
+                                <span className={"badge " + (problem.practiceEnabled ? "green" : "gray")}>
+                                    {problem.practiceEnabled ? "开放" : "关闭"}
+                                </span>
+                            </td>
                             <td>{formatTime(problem.updated)}</td>
                             <td>
                                 <span className="link" onClick={() => openEdit(problem.id)}>编辑</span>
