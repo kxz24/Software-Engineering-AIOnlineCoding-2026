@@ -17,6 +17,8 @@ from judge.constants import (
     VERDICT_SYSTEM_ERROR,
 )
 from judge.ftp import judge_ftp
+from judge.project import read_project
+from judge.project_scoring import judge_project, project_preview
 from judge.languages import normalize_language
 from judge.sandbox import CaseSpec, run_sandbox
 from judge.scoring import summarize
@@ -80,8 +82,11 @@ def _build_case_specs(samples):
 def _judge(submission):
     """执行一次判题；异常由调用方转成 failed 状态。"""
     project = ProjectSubmission.objects.filter(submission=submission).first()
-    if project is not None and project.profile == Problem.JUDGE_FTP:
-        judge_ftp(submission, project)
+    if project is not None:
+        if project.profile == Problem.JUDGE_SCRIPT:
+            judge_project(submission, project)
+        else:
+            judge_ftp(submission, project)
         record_audit(submission.student, "submission.judged", f"{submission.id} 工程题评测完成")
         return
 
@@ -207,7 +212,8 @@ def judge_submission(self, submission_id):
         _judge(submission)
     except Exception as exc:  # noqa: BLE001 - 判题失败要落状态，不能让任务静默
         logger.exception("判题失败 submission=%s", submission_id)
-        _mark_failed(submission, str(exc))
+        _mark_failed(submission, "工程评分脚本运行失败，请联系教师核对配置"
+                     if submission.problem.type == Problem.TYPE_ENGINEERING else str(exc))
 
     return {"submissionId": submission_id}
 
@@ -216,13 +222,19 @@ def judge_submission(self, submission_id):
 def run_sample_tests(run_key, lock_key, problem_id, code):
     """仅运行公开样例，把预览结果写入短期缓存。"""
     cache = caches["sample_runs"]
-    if not cache.get(run_key):
+    queued = cache.get(run_key)
+    if not queued:
         return
 
     cache.touch(lock_key, SAMPLE_RUN_EXECUTION_TTL)
     cache.set(run_key, {"status": "running"}, SAMPLE_RUN_EXECUTION_TTL)
     try:
         problem = Problem.objects.get(pk=problem_id)
+        if "archive" in queued:
+            outcome = project_preview(read_project(queued["archive"]), queued["script"], problem.memory_limit_mb)
+            cache.set(run_key, outcome, SAMPLE_RUN_RESULT_TTL)
+            cache.delete(lock_key)
+            return
         specs = _build_case_specs(problem.samples.filter(is_sample=True).order_by("id"))
         result = run_sandbox(
             language_key=problem.language,

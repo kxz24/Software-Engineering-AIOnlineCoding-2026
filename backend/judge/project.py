@@ -10,7 +10,7 @@ MAX_ARCHIVE_BYTES = 16 * 1024 * 1024
 MAX_EXPANDED_BYTES = 64 * 1024 * 1024
 
 
-def read_project(archive):
+def read_project(archive, *, ftp=False):
     if len(archive) > MAX_ARCHIVE_BYTES:
         raise ValueError("工程包不能超过 16 MB")
     try:
@@ -38,14 +38,16 @@ def read_project(archive):
                 entries[relative] = entry
 
             roots = {relative.parts[0] for relative in entries}
-            wrapped = len(roots) == 1 and not roots.intersection({"server", "client"})
+            wrapped = ftp and len(roots) == 1 and all(len(relative.parts) > 1 for relative in entries)
+            if ftp and roots.intersection({"server", "client"}):
+                wrapped = False
             files = {}
             for relative, entry in entries.items():
                 parts = relative.parts[1:] if wrapped else relative.parts
-                if len(parts) >= 2 and parts[0] in {"server", "client"}:
+                if not ftp or (len(parts) >= 2 and parts[0] in {"server", "client"}):
                     files["/".join(parts)] = project.read(entry)
             if not files:
-                raise ValueError("工程包须包含 server/ 或 client/ 目录")
+                raise ValueError("工程包中没有可评测的项目文件")
             if any(parent.as_posix() in files for name in files for parent in PurePosixPath(name).parents):
                 raise ValueError("工程包包含同名文件与目录")
             return files

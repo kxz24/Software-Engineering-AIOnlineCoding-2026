@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { fetchSampleRun, SampleRunResult, startSampleRun, StudentProblem } from "../api/client";
+import { fetchSampleRun, SampleRunResult, startSampleRun, StudentProblem, SubmissionSource } from "../api/client";
 import { verdictMeta } from "../api/judge";
 import { Icon } from "./Icon";
 
@@ -13,40 +13,42 @@ const LanguageLabels: Record<string, string> = {
 interface Run {
     examId: number;
     problemId: number;
-    code: string;
+    code: SubmissionSource | null;
     result: SampleRunResult;
 }
 
 interface Props {
     examId: number;
     problem: StudentProblem;
-    code: string;
+    code: SubmissionSource | null;
+    prepareSource?: () => Promise<SubmissionSource>;
     finished: boolean;
 }
 
-export function SampleRunPanel({ examId, problem, code, finished }: Props) {
+export function SampleRunPanel({ examId, problem, code, prepareSource, finished }: Props) {
     const [run, setRun] = useState<Run | null>(null);
     const [expanded, setExpanded] = useState(true);
     const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
     const activeRequest = useRef<AbortController | null>(null);
     useEffect(() => () => activeRequest.current?.abort(), []);
 
-    if (problem.type !== "algorithm") {
+    const project = problem.judgeProfile === "script";
+    if (problem.type !== "algorithm" && !project) {
         return null;
     }
 
     const result = run?.examId === examId && run.problemId === problem.problemId ? run.result : null;
     const busy = run?.result.status === "queued" || run?.result.status === "running";
-    const compileOnly = problem.samples.length === 0;
-    const actionLabel = compileOnly ? "检查编译" : "运行公开样例";
-    const language = LanguageLabels[problem.language];
+    const compileOnly = !project && problem.samples.length === 0;
+    const actionLabel = project ? "运行公开评分脚本" : compileOnly ? "检查编译" : "运行公开样例";
+    const language = project ? null : LanguageLabels[problem.language];
     const disabledReason = finished ? "考试已结束"
-        : !language || (compileOnly && problem.language === "python") ? "本题没有可运行的公开样例"
-        : !code.trim() ? "请先编写代码"
+        : !project && (!language || (compileOnly && problem.language === "python")) ? "本题没有可运行的公开样例"
+        : !code || (typeof code === "string" && !code.trim()) ? (project ? "请先在工作区创建文件" : "请先编写代码")
         : busy && !result ? "另一题正在运行" : "";
 
     const runCode = async () => {
-        if (activeRequest.current || disabledReason) {
+        if (activeRequest.current || disabledReason || !code) {
             return;
         }
         const request = new AbortController();
@@ -66,7 +68,8 @@ export function SampleRunPanel({ examId, problem, code, finished }: Props) {
             activeRequest.current = null;
         }, 195_000);
         try {
-            const { runId } = await startSampleRun(examId, problem.problemId, code, request.signal);
+            const source = prepareSource ? await prepareSource() : code;
+            const { runId } = await startSampleRun(examId, problem.problemId, source, request.signal);
             while (!request.signal.aborted) {
                 const next = await fetchSampleRun(examId, problem.problemId, runId, request.signal);
                 if (request.signal.aborted) {
@@ -183,8 +186,8 @@ export function SampleRunPanel({ examId, problem, code, finished }: Props) {
                                     <pre tabIndex={0}>{selectedCase.outputExcerpt || "（无输出）"}</pre>
                                 </div>
                                 <div className="sample-run-output">
-                                    <h3>期望输出</h3>
-                                    <pre tabIndex={0}>{selectedCase.expectedOutput || "（空）"}</pre>
+                                    <h3>{project ? "评分" : "期望输出"}</h3>
+                                    <pre tabIndex={0}>{project ? `${selectedCase.earnedPoints} / ${selectedCase.maxPoints} 分` : selectedCase.expectedOutput || "（空）"}</pre>
                                 </div>
                             </div>
                             {selectedCase.errorExcerpt && (

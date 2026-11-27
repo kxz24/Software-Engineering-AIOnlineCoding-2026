@@ -30,6 +30,10 @@ export const Urls = {
     myExamSubmissions: (examId: number) => `/api/v1/my/exams/${examId}/submissions`, // GET
     mySubmission: (examId: number, problemId: number) =>
         `/api/v1/my/exams/${examId}/problems/${problemId}/submissions`, // GET / POST
+    projectWorkspace: (examId: number, problemId: number) =>
+        `/api/v1/my/exams/${examId}/problems/${problemId}/project-workspace`,
+    projectAsset: (examId: number, problemId: number, asset: string) =>
+        `/api/v1/my/exams/${examId}/problems/${problemId}/project-files/${asset}`,
     sampleRuns: (examId: number, problemId: number) =>
         `/api/v1/my/exams/${examId}/problems/${problemId}/sample-runs`,
 

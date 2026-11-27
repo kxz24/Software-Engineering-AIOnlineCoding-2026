@@ -341,6 +341,7 @@ export interface SamplePayload {
 
 /** 题目详情：题面 + 初始代码 + 全部用例（教师 / 管理员可见） */
 export interface ProblemDetail extends ProblemSummary {
+    projectFiles?: Partial<Record<"starterArchive" | "workspaceTemplate" | "publicScript" | "hiddenScript", boolean>>;
     description: string;
     starterCode: string;
     createdBy: string;
@@ -365,6 +366,16 @@ export function fetchProblem(problemId: number): Promise<ProblemDetail> {
     return request(Urls.problemDetail(problemId));
 }
 
+type ProjectUploads = Partial<Record<"starterArchive" | "workspaceTemplate" | "publicScript" | "hiddenScript", File>>;
+
+function problemBody(payload: unknown, files?: ProjectUploads): unknown {
+    if (!files) return payload;
+    const form = new FormData();
+    form.append("payload", JSON.stringify(payload));
+    Object.entries(files).forEach(([key, file]) => { if (file) form.append(key, file); });
+    return form;
+}
+
 /** 创建题目（可携带用例） */
 export function createProblem(payload: {
     title: string;
@@ -379,8 +390,8 @@ export function createProblem(payload: {
     memoryLimitMb?: number;
     outputLimitKb?: number;
     samples: SamplePayload[];
-}): Promise<ProblemDetail> {
-    return request(Urls.problems, { method: "POST", body: payload });
+}, files?: ProjectUploads): Promise<ProblemDetail> {
+    return request(Urls.problems, { method: "POST", body: problemBody(payload, files) });
 }
 
 /** 编辑题目；samples 缺省表示不改用例 */
@@ -399,9 +410,10 @@ export function updateProblem(
         memoryLimitMb?: number;
         outputLimitKb?: number;
         samples?: SamplePayload[];
-    }
+    },
+    files?: ProjectUploads
 ): Promise<ProblemDetail> {
-    return request(Urls.problemDetail(problemId), { method: "PATCH", body: payload });
+    return request(Urls.problemDetail(problemId), { method: "PATCH", body: problemBody(payload, files) });
 }
 
 /** 删除题目（级联删除用例） */
@@ -581,6 +593,7 @@ export interface StudentProblem {
     description: string;
     starterCode: string;
     judgeProfile?: string;
+    hasStarterArchive?: boolean;
     samples: StudentSample[];
 }
 
@@ -615,6 +628,8 @@ export interface MySubmission extends SubmissionResultFields {
 
 /** 单个测试用例的判定结果 */
 export interface SubmissionCase {
+    earnedPoints?: number;
+    maxPoints?: number;
     name: string;
     isSample: boolean;
     verdict: string;
@@ -625,6 +640,8 @@ export interface SubmissionCase {
 }
 
 export interface SampleRunCase {
+    earnedPoints?: number;
+    maxPoints?: number;
     index: number;
     name: string;
     verdict: string;
@@ -639,10 +656,32 @@ export type SampleRunResult =
     | { status: "completed"; compileOk: boolean; compileOutput: string; cases: SampleRunCase[] }
     | { status: "failed"; message: string };
 
+export interface ProjectWorkspace {
+    files: { path: string; content: string; revision: number }[];
+    fixedFiles: string[];
+    version: number;
+}
+
+export interface WorkspaceSource {
+    workspaceRevisions: Record<string, number>;
+    workspaceVersion: number;
+}
+
+export type SubmissionSource = string | File | WorkspaceSource;
+
+export function fetchProjectWorkspace(examId: number, problemId: number): Promise<ProjectWorkspace> {
+    return request(Urls.projectWorkspace(examId, problemId));
+}
+
+export function saveProjectWorkspace(examId: number, problemId: number, files: Record<string, string>,
+                                     source: WorkspaceSource): Promise<ProjectWorkspace> {
+    return request(Urls.projectWorkspace(examId, problemId), { method: "PUT", body: { files, ...source } });
+}
+
 export function startSampleRun(
-    examId: number, problemId: number, code: string, signal: AbortSignal
+    examId: number, problemId: number, code: SubmissionSource, signal: AbortSignal
 ): Promise<{ runId: string }> {
-    return request(Urls.sampleRuns(examId, problemId), { method: "POST", body: { code }, signal });
+    return request(Urls.sampleRuns(examId, problemId), { method: "POST", body: submissionBody(code), signal });
 }
 
 export function fetchSampleRun(
@@ -670,14 +709,6 @@ export interface SubmissionDetail extends MySubmission {
     judgeError: string;
     judgedAt: string | null;
     cases: SubmissionCase[];
-    project?: ProjectReview | null;
-}
-
-export interface ProjectReview {
-    automaticPoints: number | null;
-    warmupPoints: number | null;
-    reportPoints: number | null;
-    bonusPoints: number | null;
 }
 
 /** 我的考试列表 */
@@ -703,22 +734,24 @@ export function fetchMyProblemSubmissions(
     return request(Urls.mySubmission(examId, problemId));
 }
 
+function submissionBody(code: SubmissionSource, language?: string) {
+    if (typeof code === "string") return { code, language };
+    if (!(code instanceof File)) return code;
+    const form = new FormData();
+    form.append("archive", code);
+    return form;
+}
+
 /** 提交代码（立即返回 pending，判题结果通过 fetchSubmission 轮询） */
 export function submitCode(
     examId: number,
     problemId: number,
-    code: string | File,
+    code: SubmissionSource,
     language?: string
 ): Promise<{ submission: { id: number; problemId: number; status: string; created: string }; used: number; remaining: number }> {
-    let body: unknown = { code, language };
-    if (typeof code !== "string") {
-        const form = new FormData();
-        form.append("archive", code);
-        body = form;
-    }
     return request(Urls.mySubmission(examId, problemId), {
         method: "POST",
-        body,
+        body: submissionBody(code, language),
     });
 }
 
@@ -743,12 +776,16 @@ export function removeToken() {
 }
 
 
-export function saveProjectReview(submissionId: number, points: Omit<ProjectReview, "automaticPoints">): Promise<{ score: number }> {
-    return request(Urls.submissionDetail(submissionId) + "/project-review", { method: "PATCH", body: points });
+export function downloadProjectArchive(submissionId: number): Promise<void> {
+    return downloadFile(Urls.submissionDetail(submissionId) + "/archive", `submission-${submissionId}.zip`);
 }
 
-export async function downloadProjectArchive(submissionId: number): Promise<void> {
-    const response = await fetch(Urls.submissionDetail(submissionId) + "/archive", {
+export function downloadProjectAsset(examId: number, problemId: number, asset: "starter.zip" | "public.py"): Promise<void> {
+    return downloadFile(Urls.projectAsset(examId, problemId, asset), asset);
+}
+
+async function downloadFile(url: string, filename: string): Promise<void> {
+    const response = await fetch(url, {
         headers: { Authorization: getToken() || "" },
     });
     if (!response.ok) {
@@ -758,7 +795,7 @@ export async function downloadProjectArchive(submissionId: number): Promise<void
     const href = URL.createObjectURL(await response.blob());
     const link = document.createElement("a");
     link.href = href;
-    link.download = "submission-" + submissionId + ".zip";
+    link.download = filename;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(href), 1000);
 }

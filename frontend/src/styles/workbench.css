@@ -497,3 +497,75 @@
   .wb-root .status-item { display: flex; align-items: center; gap: 5px; }
   .wb-root .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
 
+
+/* 工程题文件树和编辑区 */
+.project-workspace-materials {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+}
+
+.wb-root .project-workspace-bar {
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 12px;
+}
+
+.project-workspace-bar > strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.project-workspace-main {
+    display: grid;
+    grid-template-columns: minmax(116px, 28%) minmax(0, 1fr);
+    flex: 1 1 auto;
+    min-height: 260px;
+}
+
+.project-workspace-tree {
+    border-right: 1px solid #e2e8f0;
+    overflow: auto;
+    padding: 9px;
+}
+
+.project-workspace-create {
+    display: grid;
+    gap: 5px;
+}
+
+.project-workspace-create .input { min-width: 0; width: 100%; }
+
+.project-files {
+    margin: 6px 0;
+    padding-left: 11px;
+    list-style: none;
+}
+
+.project-workspace-tree > .project-files { padding-left: 0; }
+
+.project-files button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+    background: transparent;
+    border: 1px solid transparent;
+    padding: 4px;
+    border-radius: 4px;
+}
+
+.project-files button[aria-current] {
+    background: #dbeafe;
+    border-color: #93c5fd;
+    color: #1e3a8a;
+}
+
+.project-files summary { cursor: pointer; overflow-wrap: anywhere; }
+.project-workspace-code { display: flex; min-width: 0; min-height: 0; overflow: auto; }
+.project-workspace-code pre { margin: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-workspace-error { padding: 6px 12px; margin: 0; color: #991b1b; }

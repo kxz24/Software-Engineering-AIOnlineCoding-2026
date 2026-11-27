@@ -56,6 +56,12 @@ def problem_detail(problem):
         **problem_summary(problem),
         "description": problem.description,
         "starterCode": problem.starter_code,
+        "projectFiles": {
+            "starterArchive": bool(problem.project_starter),
+            "workspaceTemplate": bool(problem.project_template),
+            "publicScript": bool(problem.project_public),
+            "hiddenScript": bool(problem.project_hidden),
+        },
         "createdBy": problem.created_by.username if problem.created_by else "",
         "samples": [
             {

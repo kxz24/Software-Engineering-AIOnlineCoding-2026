@@ -47,10 +47,11 @@ def main(request):
         return {"pid": process.pid}
 
     commands = request.get("commands")
-    data = ("\n".join(commands) + "\n").encode() if commands else None
+    stdin = request.get("stdin")
+    data = stdin.encode() if stdin is not None else ("\n".join(commands) + "\n").encode() if commands else None
     with tempfile.TemporaryFile() as output:
         with subprocess.Popen(
-            request["argv"], stdin=subprocess.PIPE if commands else subprocess.DEVNULL,
+            request["argv"], stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
             stdout=output, **options,
         ) as process:
             try:

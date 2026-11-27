@@ -10,6 +10,8 @@ urlpatterns = [
     path("api/v1/exams/<int:exam_id>/candidates", views.ExamCandidatesView.as_view(), name="exam_candidates"),
     path("api/v1/exams/<int:exam_id>/submissions", views.ExamSubmissionsView.as_view(), name="exam_submissions"),
     path("api/v1/exams/<int:exam_id>/<str:action>", views.ExamActionView.as_view(), name="exam_action"),
+    path("api/v1/my/exams/<int:exam_id>/problems/<int:problem_id>/project-files/<str:asset>", views.MyProjectAssetView.as_view()),
+    path("api/v1/my/exams/<int:exam_id>/problems/<int:problem_id>/project-workspace", views.MyProjectWorkspaceView.as_view()),
     # 学生侧（登录即可）
     path("api/v1/my/exams", views.MyExamListView.as_view(), name="my_exams"),
     path("api/v1/my/exams/<int:exam_id>", views.MyExamDetailView.as_view(), name="my_exam_detail"),

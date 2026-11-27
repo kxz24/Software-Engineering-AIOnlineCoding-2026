@@ -186,20 +186,28 @@ JUDGE_INTEGRATION=1 python manage.py test judge.tests.JudgeTaskTests
 ```
 
 
-### FTP 工程题
 
-在题库选择「工程题 → FTP 实现」，填写题面，组卷时将题目满分设为 100 分以沿用原作业分值。学生可本地开发，在工作台上传原作业目录结构的 ZIP，允许外套一层学号目录。文件上限 16 MB，`server/` 中的 Makefile 生成 `server`，`client/` 提供可执行的 `client` 或由同目录 Makefile 生成。原包含预习、报告及可选演示，用于教师复核。
+### 工程题评分脚本
 
-评测使用两个低权限容器，共享仅含回环接口的网络，按参考对端分别验收服务端（40 分）和客户端（30 分）。正式用例含约 1 GB 传输。构建有编译器警告时扣 1 分。自动评分结束后，教师在监考页的提交动态打开「查看工程提交」，下载原包，录入预习（10 分）、报告（20 分）和加分（最多 10 分）。非 100 分的题目按配置分值等比折算。
+教师在题库选择「工程题」，填写任务和源码目录约定，上传公开和隐藏两份 Python 评分脚本。可另传两个附件。在线工作区模板预置每位学生的工程文件，课程资料包供下载。学生直接在工作台新建和编辑多文件，保存后的版本供公开试运行和正式提交使用。模板中非文本或超过 256 KB 的文件作为只读附件进入评测快照。公开脚本可下载。试运行不计入正式提交次数。隐藏脚本由独立评测容器运行，学生可以查看得分和通过情况。
 
-更新后需要执行数据库迁移，并重建判题基础镜像。Compose 部署沿用本节之后的构建与迁移流程，本地启动可执行以下命令。
+每份脚本定义 `grade(project)`，返回评分项列表。每项包含 `name`、`points`、`max_points`，可带 `feedback`。分值使用整数，单项满分为 1–1000 分，每份脚本可返回 1–100 项。两份脚本的实得分之和除以满分之和，再乘本题分值。公开与隐藏权重由各自的满分之和决定。
 
-```powershell
-docker build -t aicoding-judge:latest -f backend/judge/Dockerfile backend/judge
-cd backend
-python manage.py makemigrations user problem exam agent
-python manage.py migrate
+```python
+def grade(project):
+    result = project.run(["python3", "src/main.py"], stdin="2 3\n")
+    passed = result["status"] == 0 and result["output"].strip() == "5"
+    return [{
+        "name": "基础输入",
+        "points": 10 if passed else 0,
+        "max_points": 10,
+        "feedback": "" if passed else "输出不符合要求",
+    }]
 ```
+
+`project.run` 在学生容器中运行命令，返回退出状态与输出。可用 `cwd` 指定相对源码子目录，`timeout` 指定 1–30 秒的运行时限。服务类题目可使用 `with project.start([...]):` 启动学生程序，参考对端经回环连接它。两份脚本分别使用全新的源码副本。评分脚本通过 `project.run` 和 `project.start` 执行学生代码，测试数据可放于 `project.private`（仅评分容器访问）或 `project.shared`（两端可访问）。
+
+起始项目和提交包上限为 16 MB，单份评分脚本上限为 256 KB。更新此功能后执行数据库迁移并重建应用镜像。旧工程题可在题库重新编辑并上传两份评分脚本。
 
 ## Docker 部署
 

@@ -1,6 +1,7 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from problem.models import Problem
 from user.controllers import create_user
 from user.models import User
 from utils.jwt import encrypt_password
@@ -96,7 +97,7 @@ class ProblemCRUDTestCase(TestCase):
             {
                 "title": "修复订单排序",
                 "description": "金额相同时按创建时间升序。",
-                "type": "engineering",
+                "type": "algorithm",
                 "language": "python",
                 "difficulty": "medium",
                 "starterCode": "def sort_orders(orders): pass",
@@ -209,6 +210,8 @@ class ProblemCRUDTestCase(TestCase):
             "/api/v1/problems",
             {
                 "title": "待删除",
+                "type": "algorithm",
+                "description": "测试题目与用例关联删除",
                 "samples": [{"name": "样例 1", "input": "", "expected": ""}],
             },
             format="json",
@@ -221,9 +224,7 @@ class ProblemCRUDTestCase(TestCase):
 
     def test_list_filter(self):
         """按关键字搜索与题型过滤"""
-        self.client.post(
-            "/api/v1/problems", {"title": "修复排序", "type": "engineering"}, format="json"
-        )
+        Problem.objects.create(title="修复排序", type=Problem.TYPE_ENGINEERING)
         self.client.post(
             "/api/v1/problems",
             {

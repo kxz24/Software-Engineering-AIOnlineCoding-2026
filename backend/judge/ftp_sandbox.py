@@ -40,7 +40,7 @@ def _asset(name):
         return handle.read()
 
 
-def _stage(student, files):
+def _stage(student, files, runner, script):
     entries = [
         ("grader", None, GRADER, 0o700),
         ("exchange", None, GRADER, 0o2750),
@@ -57,8 +57,13 @@ def _stage(student, files):
         entries.append(("student/" + name, data, STUDENT, 0o644))
     entries.extend([
         ("ftp_student.py", _asset("ftp_student.py"), 0, 0o644),
-        ("grader/ftp_runner.py", _asset("ftp_runner.py"), GRADER, 0o600),
+        (f"grader/{runner}", _asset(runner), GRADER, 0o600),
     ])
+    if script is not None:
+        entries.extend([
+            ("exchange/work", None, GRADER, 0o2770),
+            ("grader/grade.py", script.encode("utf-8"), GRADER, 0o600),
+        ])
     _put(student, entries)
 
 
@@ -72,6 +77,14 @@ def _execute(student, command):
 
 
 def run_ftp_sandbox(files, memory_limit_mb):
+    return _run_project(files, memory_limit_mb, runner="ftp_runner.py", script=None, timeout=150)
+
+
+def run_script_sandbox(files, script, memory_limit_mb):
+    return _run_project(files, memory_limit_mb, runner="project_runner.py", script=script, timeout=65)
+
+
+def _run_project(files, memory_limit_mb, *, runner, script, timeout):
     client = _docker_client()
     volume = client.volumes.create()
     containers = []
@@ -96,23 +109,23 @@ def run_ftp_sandbox(files, memory_limit_mb):
         )
         containers.append(student)
         student.start()
-        _stage(student, files)
+        _stage(student, files, runner, script)
         grader = client.containers.create(
-            command=["python3", "/sandbox/grader/ftp_runner.py"],
+            command=["python3", f"/sandbox/grader/{runner}"],
             network_mode=f"container:{student.id}", user=f"{GRADER}:{STUDENT}",
             nano_cpus=1_000_000_000, mem_limit="192m", **options,
         )
         containers.append(grader)
         grader.start()
         handled = 0
-        deadline = time.monotonic() + 150
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             lines = grader.logs(stdout=True, stderr=False).splitlines()
             for line in lines[handled:]:
                 message = json.loads(line)
                 if "cases" in message:
                     return SandboxResult(
-                        compile_output=message["compile"]["output"], cases=message["cases"],
+                        compile_output=message.get("compile", {}).get("output", ""), cases=message["cases"],
                     )
                 request_id = message.pop("request")
                 reply = _execute(student, message)

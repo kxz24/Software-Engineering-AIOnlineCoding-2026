@@ -4,7 +4,7 @@ import logging
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Exists, Max, OuterRef
 from django.utils import timezone
 
 from problem.models import Problem
@@ -271,6 +271,7 @@ def _problem_for_student(item, best_score=0):
         "description": problem.description,
         "starterCode": problem.starter_code,
         "judgeProfile": problem.judge_profile,
+        "hasStarterArchive": getattr(item, "has_starter", False),
         "samples": [
             {"name": s.name, "input": s.input_data, "expected": s.expected_output}
             for s in problem.samples.filter(is_sample=True)
@@ -307,7 +308,11 @@ def student_exam_detail(student, exam):
         return "不在本场考试的名单中", False
 
     best = _best_scores(exam, student)
-    items = list(exam.exam_problems.select_related("problem"))
+    items = list(exam.exam_problems.select_related("problem")
+                 .defer("problem__project_starter", "problem__project_template", "problem__project_public", "problem__project_hidden")
+                 .annotate(has_starter=Exists(Problem.objects.filter(
+                     pk=OuterRef("problem_id"), project_starter__isnull=False
+                 ))))
     detail = {
         "id": exam.id,
         "title": exam.title,
@@ -368,7 +373,11 @@ def create_submission(student, exam, problem_id, code, language, archive=None):
             )
 
         profile = item.problem.judge_profile if item.problem.type == Problem.TYPE_ENGINEERING else ""
-        if (profile == Problem.JUDGE_FTP) != (archive is not None):
+        if item.problem.type == Problem.TYPE_ENGINEERING and (
+            profile != Problem.JUDGE_SCRIPT or not item.problem.project_public or not item.problem.project_hidden
+        ):
+            return "此工程题尚未配置公开和隐藏评分脚本", 400, False
+        if (profile == Problem.JUDGE_SCRIPT) != (archive is not None):
             detail = "此题需要上传 ZIP 工程包" if profile else "此题只接受代码文本"
             return detail, 400, False
 
@@ -377,7 +386,10 @@ def create_submission(student, exam, problem_id, code, language, archive=None):
             code=code, language=language or item.problem.language,
         )
         if archive is not None:
-            ProjectSubmission.objects.create(submission=submission, profile=profile, archive=archive)
+            ProjectSubmission.objects.create(
+                submission=submission, profile=profile, archive=archive,
+                public_script=item.problem.project_public, hidden_script=item.problem.project_hidden,
+            )
         # 事务提交后再入队，避免 worker 读到尚未可见的记录
         transaction.on_commit(
             lambda sid=submission.id: _enqueue_judge(sid)

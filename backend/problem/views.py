@@ -1,3 +1,6 @@
+import ast
+import json
+
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.response import Response
@@ -5,6 +8,9 @@ from rest_framework.views import APIView
 
 from user.models import User
 from utils.jwt import role_required
+
+from exam.project_workspace import validate_template
+from judge.project import MAX_ARCHIVE_BYTES, read_project
 
 from . import controllers
 from .models import Problem
@@ -31,7 +37,7 @@ def _validate_fields(content, partial=False):
         fields["starter_code"] = str(content.get("starterCode") or "")
     if has("judgeProfile"):
         profile = content.get("judgeProfile") or ""
-        if profile not in ("", Problem.JUDGE_FTP):
+        if profile not in ("", Problem.JUDGE_SCRIPT):
             return None, "未知工程评测方案"
         fields["judge_profile"] = profile
     if has("image"):
@@ -77,6 +83,63 @@ def _validate_fields(content, partial=False):
         fields["difficulty"] = value
 
     return fields, None
+
+
+def _problem_payload(request, existing=None):
+    """从编辑表单读取题目元数据和可独立替换的工程附件。"""
+    uploads = request.FILES
+    payload = request.data
+    if "payload" in payload:
+        try:
+            payload = json.loads(payload["payload"])
+        except (TypeError, ValueError):
+            raise ValueError("题目元数据格式无效")
+    if not isinstance(payload, dict):
+        raise ValueError("题目元数据格式无效")
+    fields, error = _validate_fields(payload, partial=existing is not None)
+    if error:
+        raise ValueError(error)
+    kind = fields.get("type", existing.type if existing else Problem.TYPE_ENGINEERING)
+    if kind != Problem.TYPE_ENGINEERING:
+        if uploads or fields.get("judge_profile"):
+            raise ValueError("只有工程题支持评分脚本和起始项目")
+        fields["judge_profile"] = ""
+        return payload, fields
+    if not uploads and fields.get("judge_profile", getattr(existing, "judge_profile", "")) != Problem.JUDGE_SCRIPT:
+        raise ValueError("工程题须上传公开和隐藏评分脚本")
+    fields["judge_profile"] = Problem.JUDGE_SCRIPT
+    for key, field, label in (
+        ("starterArchive", "project_starter", "课程资料包"),
+        ("workspaceTemplate", "project_template", "在线工作区模板"),
+        ("publicScript", "project_public", "公开评分脚本"),
+        ("hiddenScript", "project_hidden", "隐藏评分脚本"),
+    ):
+        item = uploads.get(key)
+        if item is None:
+            if field in {"project_public", "project_hidden"} and not getattr(existing, field, None):
+                raise ValueError(f"请上传{label}")
+            continue
+        if field in {"project_starter", "project_template"}:
+            if item.size > MAX_ARCHIVE_BYTES:
+                raise ValueError(f"{label}不能超过 16 MB")
+            data = item.read()
+            if field == "project_template":
+                validate_template(data)
+            else:
+                read_project(data)
+        else:
+            if item.size > 256 * 1024:
+                raise ValueError(f"{label}不能超过 256 KB")
+            try:
+                data = item.read().decode("utf-8-sig")
+                tree = ast.parse(data)
+                if not any(isinstance(node, ast.FunctionDef) and node.name == "grade" for node in tree.body):
+                    raise ValueError("缺少 grade 函数")
+                compile(tree, "grade.py", "exec")
+            except (UnicodeError, SyntaxError, ValueError) as exc:
+                raise ValueError(f"{label}必须是有效的 Python 文件，并定义 grade(project)") from exc
+        fields[field] = data
+    return payload, fields
 
 
 def _validate_algorithm_content(problem_type, description, samples, existing=None):
@@ -166,7 +229,7 @@ class ProblemListView(APIView):
                     "language": {"type": "string", "description": "python / cpp / c / java"},
                     "difficulty": {"type": "string", "description": "easy / medium / hard"},
                     "starterCode": {"type": "string", "description": "初始代码"},
-                    "judgeProfile": {"type": "string", "description": "工程评测方案：ftp 或空"},
+                    "judgeProfile": {"type": "string", "description": "工程评测方案：script 或空"},
                     "image": {"type": "string", "description": "依赖镜像"},
                     "timeLimitMs": {"type": "integer", "description": "单用例时限（毫秒）"},
                     "memoryLimitMb": {"type": "integer", "description": "内存上限（MB）"},
@@ -190,12 +253,10 @@ class ProblemListView(APIView):
     )
     @role_required(User.ROLE_ADMIN, User.ROLE_TEACHER)
     def post(self, request, *args, **kwargs):
-        content = request.data or {}
-        fields, error = _validate_fields(content, partial=False)
-        if error:
-            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
-        if fields.get("judge_profile") and fields["type"] != Problem.TYPE_ENGINEERING:
-            return Response({"message": "只有工程题可启用工程评测"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            content, fields = _problem_payload(request)
+        except ValueError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         samples, error = _validate_samples(content)
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
@@ -277,12 +338,10 @@ class ProblemDetailView(APIView):
         if not ok:
             return Response({"message": "题目不存在"}, status=status.HTTP_404_NOT_FOUND)
 
-        content = request.data or {}
-        fields, error = _validate_fields(content, partial=True)
-        if error:
-            return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
-        if fields.get("judge_profile", problem.judge_profile) and fields.get("type", problem.type) != Problem.TYPE_ENGINEERING:
-            return Response({"message": "只有工程题可启用工程评测"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            content, fields = _problem_payload(request, problem)
+        except ValueError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         samples, error = _validate_samples(content)
         if error:
             return Response({"message": error}, status=status.HTTP_400_BAD_REQUEST)
