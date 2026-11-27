@@ -563,13 +563,30 @@ class MySubmissionView(APIView):
             return Response({"message": str(exc)}, status=409)
         except ValueError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        code = str(content.get("code") or "")
+        problem = Problem.objects.filter(pk=kwargs.get("problem_id")).first()
+        if problem and hasattr(problem, "project_bundle"):
+            files = content.get("files")
+            if not isinstance(files, dict) or not files or len(files) > 100:
+                return Response({"message": "工程题需要提交文件对象（上限 100 个）"}, status=400)
+            from problem.project_package import ProjectPackageError, safe_name
+            import json
+            try:
+                for path, value in files.items():
+                    if (not isinstance(path, str) or safe_name(path) != path or
+                            path.startswith("private/") or not isinstance(value, str) or
+                            len(path) > 128):
+                        raise ProjectPackageError("提交文件路径或内容无效")
+            except ProjectPackageError as exc:
+                return Response({"message": str(exc)}, status=400)
+            code = json.dumps({"files": files}, ensure_ascii=False)
+        else:
+            code = str(content.get("code") or "")
+            if archive is None and not code.strip():
+                return Response({"message": "代码不能为空"}, status=status.HTTP_400_BAD_REQUEST)
         if archive is not None:
             code = ""
-        elif not code.strip():
-            return Response({"message": "代码不能为空"}, status=status.HTTP_400_BAD_REQUEST)
-        if len(code) > 200_000:
-            return Response({"message": "代码过长（上限 200 KB）"}, status=status.HTTP_400_BAD_REQUEST)
+        if len(code.encode("utf-8")) > 200_000:
+            return Response({"message": "代码过长（上限 200 KB）"}, status=400)
 
         submission, code_status, ok = controllers.create_submission(
             request.user, exam, kwargs.get("problem_id"), code,

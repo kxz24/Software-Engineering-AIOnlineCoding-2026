@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -8,7 +9,7 @@ from rest_framework.test import APIClient
 
 from judge.sandbox import SandboxResult
 from judge.tasks import run_sample_tests
-from problem.models import Problem
+from problem.models import Problem, ProjectBundle
 from user.models import User
 from utils.jwt import encrypt_password
 
@@ -540,6 +541,30 @@ class StudentExamTestCase(ExamBaseTestCase):
         resp = self.client.get(f"/api/v1/exams/{exam_id}/submissions").json()
         self.assertEqual(resp["total"], 2)
         self.assertEqual(resp["submissions"][0]["username"], "2023012345")
+
+    def test_project_bundle_submission_preserves_all_files(self):
+        self.auth()
+        bundle = ProjectBundle.objects.create(
+            problem=self.problem2, archive=b"package", runtime="build-tools",
+            public_files={"src/main.c": "starter", "Makefile": "all:"},
+            grader_command=["python3", "private/grade.py"],
+        )
+        exam = self.create_exam()
+        self.assemble(exam["id"])
+        self.auth(self.student_token)
+        url = f"/api/v1/my/exams/{exam['id']}/problems/{self.problem2.id}/submissions"
+        files = {"src/main.c": "int main(void) { return 0; }", "Makefile": "all:"}
+        response = self.client.post(url, {"files": files}, format="json")
+        self.assertEqual(response.status_code, 201, response.content)
+        submission = Submission.objects.get(pk=response.json()["submission"]["id"])
+        self.assertEqual(json.loads(submission.code)["files"], files)
+        self.assertFalse(hasattr(submission, "project"))
+
+        bundle.preparation_status = "failed"
+        bundle.save(update_fields=["preparation_status"])
+        response = self.client.post(url, {"files": files}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Submission.objects.filter(problem=self.problem2).count(), 1)
 
     def test_submission_time_rules(self):
         """未开始 / 已结束的考试不能提交"""

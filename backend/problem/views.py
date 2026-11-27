@@ -2,6 +2,10 @@ import ast
 import json
 
 from drf_spectacular.utils import OpenApiResponse, extend_schema
+from django.conf import settings
+from django.db import transaction
+import logging
+import re
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -13,7 +17,21 @@ from exam.project_workspace import validate_template
 from judge.project import MAX_ARCHIVE_BYTES, read_project
 
 from . import controllers
-from .models import Problem
+from .models import Problem, ProjectBundle
+from .project_package import ProjectPackageError, parse_package, MAX_ARCHIVE_BYTES as MAX_PACKAGE_BYTES
+
+logger = logging.getLogger(__name__)
+
+
+def _enqueue_preparation(bundle_id):
+    try:
+        from judge.tasks import prepare_project_bundle
+        prepare_project_bundle.delay(bundle_id)
+    except Exception as exc:
+        logger.exception("工程题准备任务入队失败 bundle=%s", bundle_id)
+        ProjectBundle.objects.filter(pk=bundle_id).update(
+            preparation_status="failed", preparation_message=f"准备任务无法启动: {exc}"[:1000]
+        )
 
 
 def _validate_fields(content, partial=False):
@@ -104,6 +122,8 @@ def _problem_payload(request, existing=None):
         if uploads or fields.get("judge_profile"):
             raise ValueError("只有工程题支持评分脚本和起始项目")
         fields["judge_profile"] = ""
+        return payload, fields
+    if existing is not None and hasattr(existing, "project_bundle"):
         return payload, fields
     if not uploads and fields.get("judge_profile", getattr(existing, "judge_profile", "")) != Problem.JUDGE_SCRIPT:
         raise ValueError("工程题须上传公开和隐藏评分脚本")
@@ -383,3 +403,60 @@ class ProblemDetailView(APIView):
                 {"message": "删除失败，请稍后重试"}, status=status.HTTP_400_BAD_REQUEST
             )
         return Response({"message": "ok"}, status=status.HTTP_200_OK)
+
+
+class ProjectImportView(APIView):
+    """Import a teacher-authored engineering ZIP; keep private grader data server-side."""
+
+    @role_required(User.ROLE_ADMIN, User.ROLE_TEACHER)
+    def post(self, request, *args, **kwargs):
+        uploaded = request.FILES.get("file")
+        if uploaded is None or uploaded.size > MAX_PACKAGE_BYTES:
+            return Response({"message": "请上传不超过 8 MB 的工程题 ZIP"}, status=400)
+        try:
+            raw = uploaded.read(MAX_PACKAGE_BYTES + 1)
+            metadata, public = parse_package(raw)
+        except ProjectPackageError as exc:
+            return Response({"message": str(exc)}, status=400)
+        if metadata["environment"] is None and metadata["runtime"] not in settings.PROJECT_JUDGE_RUNTIMES:
+            return Response({"message": "runtime 未由管理员配置"}, status=400)
+        if metadata["difficulty"] not in dict(Problem.DIFFICULTY_CHOICES):
+            return Response({"message": "difficulty 无效"}, status=400)
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9+#.-]{0,15}", metadata["language"]):
+            return Response({"message": "language 需为不超过 16 字符的语言标签"}, status=400)
+        with transaction.atomic():
+            problem = Problem.objects.create(
+                title=metadata["title"], description=metadata["description"],
+                type=Problem.TYPE_ENGINEERING, difficulty=metadata["difficulty"],
+                language=metadata["language"], created_by=request.user,
+            )
+            bundle = ProjectBundle.objects.create(
+                problem=problem, archive=raw, public_files=public,
+                runtime=metadata["runtime"],
+                grader_command=metadata["grader_command"],
+                max_score=metadata["max_score"],
+                environment=metadata["environment"],
+                self_check_min_score=metadata["self_check_min_score"],
+                preparation_status="pending" if metadata["environment"] is not None else "ready",
+            )
+            if metadata["environment"] is not None:
+                transaction.on_commit(lambda bid=bundle.id: _enqueue_preparation(bid))
+        return Response(controllers.problem_detail(Problem.objects.get(pk=problem.pk)), status=201)
+
+
+class ProjectPreparationView(APIView):
+    """Retry preparation after the teacher fixes an external build issue."""
+
+    @role_required(User.ROLE_ADMIN, User.ROLE_TEACHER)
+    def post(self, request, problem_id, *args, **kwargs):
+        bundle = ProjectBundle.objects.filter(problem_id=problem_id).first()
+        if bundle is None or bundle.environment is None:
+            return Response({"message": "此题没有自动环境配置"}, status=404)
+        if bundle.preparation_status == "preparing":
+            return Response({"message": "正在准备，请稍后查看"}, status=409)
+        bundle.preparation_status = "pending"
+        bundle.preparation_message = ""
+        bundle.save(update_fields=["preparation_status", "preparation_message"])
+        _enqueue_preparation(bundle.id)
+        bundle.refresh_from_db()
+        return Response({"status": bundle.preparation_status, "message": bundle.preparation_message})

@@ -1,10 +1,24 @@
 from django.test import TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from io import BytesIO
+import json
+import zipfile
+from unittest import mock
+from datetime import timedelta
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from problem.models import Problem
 from user.controllers import create_user
 from user.models import User
 from utils.jwt import encrypt_password
+from exam.controllers import _problem_for_student
+from exam.models import Exam, ExamProblem
+from exam.controllers import publish_exam
+from problem.models import Problem, ProjectBundle
+from problem.project_package import ProjectPackageError, parse_package
+from judge.project_sandbox import _runtime_package
+from judge.tasks import prepare_project_bundle
 
 # 题库接口测试。跨 app 的流程（如组卷）后续放在根目录 test 文件夹
 
@@ -244,3 +258,179 @@ class ProblemCRUDTestCase(TestCase):
         resp = self.client.get("/api/v1/problems", {"type": "algorithm"})
         titles = [item["title"] for item in resp.json()["problems"]]
         self.assertEqual(titles, ["两数之和"])
+
+
+class ProjectImportTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        create_user(username="teacher_import", password=encrypt_password("secret6"),
+                    nickname="教师", role=User.ROLE_TEACHER)
+        token = login_token(self.client, "teacher_import", "secret6")
+        self.client.credentials(**auth_header(token))
+
+    @staticmethod
+    def package(public_name="src/main.c"):
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("project.json", json.dumps({
+                "title": "Example project", "description": "Complete the project",
+                "runtime": "build-tools", "graderCommand": ["python3", "private/grade.py"],
+            }))
+            archive.writestr(f"public/{public_name}", "int main(void) { return 0; }")
+            archive.writestr("private/grade.py", "# hidden grader")
+        return SimpleUploadedFile("project.zip", buffer.getvalue(), content_type="application/zip")
+
+    def test_teacher_import_and_student_projection(self):
+        response = self.client.post("/api/v1/problems/import-project", {"file": self.package()})
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["publicFiles"]["src/main.c"], "int main(void) { return 0; }")
+        problem = Problem.objects.get(pk=response.json()["id"])
+        student = _problem_for_student(ExamProblem(problem=problem))
+        self.assertEqual(student["publicFiles"], {"src/main.c": "int main(void) { return 0; }"})
+        self.assertNotIn("graderCommand", student)
+        self.assertNotIn("hidden grader", json.dumps(student))
+
+    def test_imported_problem_description_can_be_edited(self):
+        response = self.client.post("/api/v1/problems/import-project", {"file": self.package()})
+        self.assertEqual(response.status_code, 201, response.content)
+        problem_id = response.json()["id"]
+        response = self.client.patch(
+            f"/api/v1/problems/{problem_id}",
+            {"title": "Updated project", "description": "Updated statement", "difficulty": "hard"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["description"], "Updated statement")
+        self.assertEqual(response.json()["publicFiles"], {"src/main.c": "int main(void) { return 0; }"})
+        self.assertEqual(Problem.objects.get(pk=problem_id).judge_profile, "")
+
+    def test_reject_path_traversal(self):
+        response = self.client.post(
+            "/api/v1/problems/import-project", {"file": self.package("../escape.c")}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Problem.objects.count(), 0)
+
+    @staticmethod
+    def managed_package(environment=None, dockerfile=None):
+        buffer = BytesIO()
+        manifest = {
+            "title": "Managed project", "description": "Complete the file",
+            "graderCommand": ["python3", "private/grade.py"],
+            "selfCheckMinScore": 80,
+        }
+        if environment is not None:
+            manifest["environment"] = environment
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("project.json", json.dumps(manifest))
+            archive.writestr("public/src/main.c", "int main(void) { return 0; }")
+            archive.writestr("private/grade.py", "# grader")
+            archive.writestr("private/selfcheck/src/main.c", "int main(void) { return 1; }")
+            if dockerfile is not None:
+                archive.writestr("private/Dockerfile", dockerfile)
+        return buffer.getvalue()
+
+    def test_managed_package_is_queued_and_keeps_reference_private(self):
+        raw = self.managed_package({"systemPackages": ["make", "gcc"]})
+        with mock.patch("judge.tasks.prepare_project_bundle.delay") as enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    "/api/v1/problems/import-project",
+                    {"file": SimpleUploadedFile("managed.zip", raw)},
+                )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["preparationStatus"], "pending")
+        self.assertNotIn("return 1", json.dumps(response.json()))
+        bundle = ProjectBundle.objects.get(problem_id=response.json()["id"])
+        self.assertEqual(bundle.environment["systemPackages"], ["gcc", "make"])
+        enqueue.assert_called_once_with(bundle.id)
+        teacher = User.objects.get(username="teacher_import")
+        exam = Exam.objects.create(
+            title="Managed exam", created_by=teacher,
+            start_time=timezone.now() + timedelta(hours=1),
+            end_time=timezone.now() + timedelta(hours=2),
+        )
+        ExamProblem.objects.create(exam=exam, problem=bundle.problem, score=100)
+        reason, ok = publish_exam(teacher, exam)
+        self.assertFalse(ok)
+        self.assertIn("尚未自检通过", reason)
+        bundle.preparation_status = "ready"
+        bundle.save(update_fields=["preparation_status"])
+        _, ok = publish_exam(teacher, exam)
+        self.assertTrue(ok)
+
+    def test_reject_shell_in_package_name(self):
+        raw = self.managed_package({"systemPackages": ["gcc;touch /tmp/unsafe"]})
+        with self.assertRaises(ProjectPackageError):
+            parse_package(raw)
+
+    def test_dockerfile_is_advanced_mode(self):
+        raw = self.managed_package(dockerfile="FROM python:3.11-slim\n")
+        metadata, public = parse_package(raw)
+        self.assertEqual(metadata["environment"], {"dockerfile": True})
+        self.assertEqual(list(public), ["src/main.c"])
+        with mock.patch("judge.tasks.prepare_project_bundle.delay") as enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    "/api/v1/problems/import-project",
+                    {"file": SimpleUploadedFile("advanced.zip", raw)},
+                )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["preparationStatus"], "pending")
+        enqueue.assert_called_once()
+
+    def test_reference_and_build_files_are_removed_from_runtime_package(self):
+        raw = self.managed_package(dockerfile="FROM python:3.11-slim\n")
+        filtered = _runtime_package(raw)
+        with zipfile.ZipFile(BytesIO(filtered)) as archive:
+            self.assertIn("private/grade.py", archive.namelist())
+            self.assertNotIn("private/selfcheck/src/main.c", archive.namelist())
+            self.assertNotIn("private/Dockerfile", archive.namelist())
+
+    def test_other_language_label_is_accepted_for_engineering_package(self):
+        raw = self.managed_package({"systemPackages": ["ruby"]})
+        source = BytesIO(raw)
+        output = BytesIO()
+        with zipfile.ZipFile(source) as old, zipfile.ZipFile(output, "w") as new:
+            for info in old.infolist():
+                content = old.read(info)
+                if info.filename == "project.json":
+                    manifest = json.loads(content)
+                    manifest["language"] = "ruby"
+                    content = json.dumps(manifest).encode()
+                new.writestr(info, content)
+        with mock.patch("judge.tasks.prepare_project_bundle.delay"):
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    "/api/v1/problems/import-project",
+                    {"file": SimpleUploadedFile("ruby.zip", output.getvalue())},
+                )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["language"], "ruby")
+
+    def test_preparation_failure_is_visible_and_retryable(self):
+        raw = self.managed_package({"systemPackages": ["gcc"]})
+        with mock.patch("judge.tasks.prepare_project_bundle.delay"):
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    "/api/v1/problems/import-project",
+                    {"file": SimpleUploadedFile("managed.zip", raw)},
+                )
+        self.assertEqual(response.status_code, 201, response.content)
+        bundle = ProjectBundle.objects.get(problem_id=response.json()["id"])
+        with mock.patch("judge.project_environment.prepare_environment", side_effect=ValueError("缺少编译工具")):
+            prepare_project_bundle(bundle.id)
+        bundle.refresh_from_db()
+        self.assertEqual(bundle.preparation_status, "failed")
+        self.assertIn("缺少编译工具", bundle.preparation_message)
+        with mock.patch("judge.tasks.prepare_project_bundle.delay") as enqueue:
+            retry = self.client.post(f"/api/v1/problems/{bundle.problem_id}/prepare")
+        self.assertEqual(retry.status_code, 200, retry.content)
+        enqueue.assert_called_once_with(bundle.id)
+        bundle.refresh_from_db()
+        self.assertEqual(bundle.preparation_status, "pending")
+        with mock.patch("judge.project_environment.prepare_environment", return_value=("image:ready", "自检通过")):
+            prepare_project_bundle(bundle.id)
+        bundle.refresh_from_db()
+        self.assertEqual(bundle.preparation_status, "ready")
+        self.assertEqual(bundle.prepared_image, "image:ready")

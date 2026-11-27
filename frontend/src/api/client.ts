@@ -328,7 +328,10 @@ export interface ProblemSummary {
     outputLimitKb: number;
     sampleCount: number;
     hiddenCount: number;
+    hasProjectBundle?: boolean;
     updated: string;
+    preparationStatus?: "pending" | "preparing" | "ready" | "failed" | null;
+    preparationMessage?: string;
 }
 
 /** 测试样例（提交格式，也是详情的返回格式） */
@@ -344,6 +347,7 @@ export interface ProblemDetail extends ProblemSummary {
     projectFiles?: Partial<Record<"starterArchive" | "workspaceTemplate" | "publicScript" | "hiddenScript", boolean>>;
     description: string;
     starterCode: string;
+    publicFiles?: Record<string, string> | null;
     createdBy: string;
     samples: (SamplePayload & { id: number })[];
 }
@@ -374,6 +378,29 @@ function problemBody(payload: unknown, files?: ProjectUploads): unknown {
     form.append("payload", JSON.stringify(payload));
     Object.entries(files).forEach(([key, file]) => { if (file) form.append(key, file); });
     return form;
+}
+
+/** 上传工程题包；题目说明与初始文件由 ZIP 内 project.json/public/ 提供。 */
+export async function importProject(file: File): Promise<ProblemDetail> {
+    const body = new FormData();
+    body.append("file", file);
+    let response: Response;
+    try {
+        response = await fetch(Urls.projectImport, {
+            method: "POST", headers: { Authorization: getToken() || "" }, body,
+        });
+    } catch (e) {
+        throw new ApiError(NetworkErrorMessage, 0);
+    }
+    const json = await readJson(response);
+    if (!response.ok) {
+        throw new ApiError(json.message || "导入失败", response.status);
+    }
+    return json as ProblemDetail;
+}
+
+export function retryProjectPreparation(problemId: number): Promise<{ status: string; message: string }> {
+    return request(Urls.projectPrepare(problemId), { method: "POST" });
 }
 
 /** 创建题目（可携带用例） */
@@ -594,6 +621,7 @@ export interface StudentProblem {
     starterCode: string;
     judgeProfile?: string;
     hasStarterArchive?: boolean;
+    publicFiles?: Record<string, string> | null;
     samples: StudentSample[];
 }
 
@@ -747,11 +775,12 @@ export function submitCode(
     examId: number,
     problemId: number,
     code: SubmissionSource,
-    language?: string
+    language?: string,
+    files?: Record<string, string>
 ): Promise<{ submission: { id: number; problemId: number; status: string; created: string }; used: number; remaining: number }> {
     return request(Urls.mySubmission(examId, problemId), {
         method: "POST",
-        body: submissionBody(code, language),
+        body: files ? { files, language } : submissionBody(code, language),
     });
 }
 

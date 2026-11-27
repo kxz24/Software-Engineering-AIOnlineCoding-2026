@@ -15,6 +15,9 @@ x-backend: &backend
     MYSQL_USER: aicoding
     MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in backend/.env}
     CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in backend/.env}@redis:6379/0
+    PROJECT_JUDGE_IMAGE: ${PROJECT_JUDGE_IMAGE:-aicoding-project-judge:latest}
+    PROJECT_JUDGE_RUNTIMES_JSON: '${PROJECT_JUDGE_RUNTIMES_JSON:-{}}'
+    PROJECT_MANAGED_BASE_IMAGE: ${PROJECT_MANAGED_BASE_IMAGE:-python:3.11-slim}
   networks:
     - data
 
@@ -109,6 +112,15 @@ services:
     profiles: ["build"]
     build:
       context: judge
+
+  project-judge-base:
+    image: aicoding-project-judge:latest
+    build:
+      context: judge
+      dockerfile: ProjectDockerfile
+    profiles: ["build"]
+    restart: "no"
+    command: ["true"]
 
   nginx:
     image: aicoding-nginx:local

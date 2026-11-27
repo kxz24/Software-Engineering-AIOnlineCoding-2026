@@ -143,6 +143,10 @@ def publish_exam(user, exam):
         return "结束时间必须晚于开始时间", False
     if not exam.exam_problems.exists():
         return "请先从题库选题组卷", False
+    for item in exam.exam_problems.select_related("problem"):
+        bundle = getattr(item.problem, "project_bundle", None)
+        if bundle is not None and bundle.preparation_status != "ready":
+            return f"工程题「{item.problem.title}」的环境尚未自检通过", False
     if not open_to_all(exam) and not exam.exam_candidates.exists():
         return "考生名单为空", False
 
@@ -272,6 +276,7 @@ def _problem_for_student(item, best_score=0):
         "starterCode": problem.starter_code,
         "judgeProfile": problem.judge_profile,
         "hasStarterArchive": getattr(item, "has_starter", False),
+        "publicFiles": problem.project_bundle.public_files if hasattr(problem, "project_bundle") else None,
         "samples": [
             {"name": s.name, "input": s.input_data, "expected": s.expected_output}
             for s in problem.samples.filter(is_sample=True)
@@ -373,11 +378,14 @@ def create_submission(student, exam, problem_id, code, language, archive=None):
             )
 
         profile = item.problem.judge_profile if item.problem.type == Problem.TYPE_ENGINEERING else ""
-        if item.problem.type == Problem.TYPE_ENGINEERING and (
+        bundle = getattr(item.problem, "project_bundle", None)
+        if bundle is not None and bundle.preparation_status != "ready":
+            return "此工程题运行环境尚未准备完成", 400, False
+        if item.problem.type == Problem.TYPE_ENGINEERING and bundle is None and (
             profile != Problem.JUDGE_SCRIPT or not item.problem.project_public or not item.problem.project_hidden
         ):
             return "此工程题尚未配置公开和隐藏评分脚本", 400, False
-        if (profile == Problem.JUDGE_SCRIPT) != (archive is not None):
+        if (bundle is None and profile == Problem.JUDGE_SCRIPT) != (archive is not None):
             detail = "此题需要上传 ZIP 工程包" if profile else "此题只接受代码文本"
             return detail, 400, False
 

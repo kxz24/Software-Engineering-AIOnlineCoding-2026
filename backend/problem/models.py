@@ -52,9 +52,8 @@ class Problem(models.Model):
     )
     language = models.CharField(
         max_length=16,
-        choices=LANGUAGE_CHOICES,
         default=LANGUAGE_PYTHON,
-        verbose_name="判题语言",
+        verbose_name="语言标签（算法题限四种语言）",
     )
     difficulty = models.CharField(
         max_length=16,
@@ -115,3 +114,21 @@ class TestSample(models.Model):
 
     def __str__(self):
         return f"{self.problem.title} · {self.name}"
+
+
+class ProjectBundle(models.Model):
+    """Teacher-owned engineering package. Private grader files never enter student APIs."""
+
+    problem = models.OneToOneField(
+        Problem, on_delete=models.CASCADE, related_name="project_bundle"
+    )
+    archive = models.BinaryField()
+    public_files = models.JSONField(default=dict)
+    runtime = models.CharField(max_length=64)
+    grader_command = models.JSONField(default=list)
+    max_score = models.PositiveIntegerField(default=100)
+    environment = models.JSONField(null=True, blank=True)
+    prepared_image = models.CharField(max_length=128, blank=True, default="")
+    preparation_status = models.CharField(max_length=16, default="ready")
+    preparation_message = models.TextField(blank=True, default="")
+    self_check_min_score = models.FloatField(default=1)

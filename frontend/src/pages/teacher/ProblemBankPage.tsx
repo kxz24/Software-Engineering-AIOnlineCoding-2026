@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { TeacherLayout } from "../../layouts/TeacherLayout";
 import { Icon } from "../../components/Icon";
 import { toast } from "../../components/Toast";
@@ -8,6 +8,8 @@ import {
     deleteProblem,
     fetchProblem,
     fetchProblems,
+    importProject,
+    retryProjectPreparation,
     ProblemSummary,
     SamplePayload,
     updateProblem,
@@ -50,6 +52,7 @@ type SampleForm = SamplePayload;
 /** 编辑器表单：id 为空表示新建 */
 interface ProblemForm {
     id: number | null;
+    hasProjectBundle?: boolean;
     title: string;
     type: string;
     language: string;
@@ -114,6 +117,7 @@ const SmallAreaStyle: React.CSSProperties = {
  * 隐藏测试仅用于判分；接口见 /api/v1/problems。
  */
 export function ProblemBankPage() {
+    const projectInput = useRef<HTMLInputElement>(null);
     const [problems, setProblems] = useState<ProblemSummary[]>([]);
     const [keyword, setKeyword] = useState("");
     const [loading, setLoading] = useState(true);
@@ -123,6 +127,7 @@ export function ProblemBankPage() {
     const [form, setForm] = useState<ProblemForm | null>(null);
     const [formError, setFormError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
+    const [uploading, setUploading] = useState(false);
 
     const loadProblems = (search: string) => {
         setLoading(true);
@@ -143,6 +148,19 @@ export function ProblemBankPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    const preparing = problems.some(problem =>
+        problem.preparationStatus === "pending" || problem.preparationStatus === "preparing"
+    );
+    useEffect(() => {
+        if (!preparing) return;
+        const timer = window.setInterval(() => {
+            fetchProblems(keyword ? { keyword } : {})
+                .then(result => setProblems(result.problems))
+                .catch((e: ApiError) => setError(e.message));
+        }, 5000);
+        return () => window.clearInterval(timer);
+    }, [preparing, keyword]);
+
     const openCreate = () => {
         setProjectUploads({});
         setForm({ ...EmptyForm, samples: [] });
@@ -156,6 +174,7 @@ export function ProblemBankPage() {
             .then(detail => {
                 setForm({
                     id: detail.id,
+                    hasProjectBundle: detail.hasProjectBundle,
                     title: detail.title,
                     type: detail.type,
                     language: detail.language,
@@ -196,7 +215,7 @@ export function ProblemBankPage() {
                 return;
             }
         }
-        if (form.type === "engineering" && (["publicScript", "hiddenScript"] as const).some(
+        if (form.type === "engineering" && !form.hasProjectBundle && (["publicScript", "hiddenScript"] as const).some(
             key => !projectUploads[key] && !form.projectFiles[key]
         )) {
             setFormError("请上传公开和隐藏评分脚本。");
@@ -227,7 +246,9 @@ export function ProblemBankPage() {
                 await createProblem(payload, form.type === "engineering" ? projectUploads : undefined);
                 toast("题目已创建", "success");
             } else {
-                await updateProblem(form.id, payload, form.type === "engineering" ? projectUploads : undefined);
+                await updateProblem(form.id, form.hasProjectBundle ? {
+                    title: payload.title, description: payload.description, difficulty: payload.difficulty,
+                } : payload, form.type === "engineering" && !form.hasProjectBundle ? projectUploads : undefined);
                 toast("题目已保存", "success");
             }
             setForm(null);
@@ -283,12 +304,36 @@ export function ProblemBankPage() {
                 <div>
                     <div className="page-title">题库管理</div>
                     <div className="page-sub">
-                        共 {problems.length} 道题 · 样例测试对考生可见，隐藏测试仅用于判分
+                        共 {problems.length} 道题 · 多文件工程题通过 ZIP 导入并自动试跑教师参考提交
                     </div>
                 </div>
                 <div className="page-actions">
+                    <input ref={projectInput} type="file" accept=".zip,application/zip" style={{ display: "none" }}
+                           onChange={event => {
+                               const file = event.target.files && event.target.files[0];
+                               if (!file) return;
+                               if (file.size > 8 * 1024 * 1024) {
+                                   setError("工程题 ZIP 不能超过 8 MB");
+                                   event.target.value = "";
+                                   return;
+                               }
+                               setUploading(true);
+                               importProject(file)
+                                   .then(result => {
+                                       toast(result.preparationStatus === "ready" ? "工程题已导入" :
+                                           "工程题已上传，正在准备环境并试跑参考提交", "success");
+                                       loadProblems(keyword);
+                                   })
+                                   .catch((e: ApiError) => setError(e.message))
+                                   .finally(() => setUploading(false));
+                               event.target.value = "";
+                           }}/>
+                    <button type="button" className="btn btn-secondary" style={{ whiteSpace: "nowrap" }} disabled={uploading}
+                            onClick={() => projectInput.current?.click()}>
+                        {uploading ? "上传中…" : "导入工程题 ZIP"}
+                    </button>
                     <input className="input"
-                           style={SmallInputStyle}
+                           style={{ ...SmallInputStyle, width: 176, flex: "0 0 176px" }}
                            placeholder="搜索标题 / 题面"
                            value={keyword}
                            onChange={event => setKeyword(event.target.value)}
@@ -297,14 +342,28 @@ export function ProblemBankPage() {
                                    loadProblems(keyword.trim());
                                }
                            }}/>
-                    <button type="button" className="btn btn-secondary" onClick={() => loadProblems(keyword.trim())}>
+                    <button type="button" className="btn btn-secondary" style={{ whiteSpace: "nowrap" }} onClick={() => loadProblems(keyword.trim())}>
                         <Icon name="search" size={13}/>搜索
                     </button>
-                    <button type="button" className="btn btn-primary" onClick={openCreate}>
+                    <button type="button" className="btn btn-primary" style={{ whiteSpace: "nowrap" }} onClick={openCreate}>
                         <Icon name="plus" size={13}/>新建题目
                     </button>
                 </div>
             </div>
+
+            <details className="card" style={{ marginBottom: 14 }}>
+                <summary style={{ cursor: "pointer", padding: "11px 16px", fontSize: 12, fontWeight: 600, color: "#334155" }}>
+                    多文件工程题怎么准备？展开查看题包清单
+                </summary>
+                <div className="card-body" style={{ borderTop: "1px solid #eef2f7", fontSize: 12, color: "#475569", lineHeight: 1.7 }}>
+                    <div>① <strong>public/</strong> 放学生可编辑文件；<strong>private/</strong> 放评分脚本和隐藏测试。</div>
+                    <div>② <strong>private/selfcheck/</strong> 放可用的参考提交，路径与 public/ 对应。</div>
+                    <div>③ 在 <strong>project.json</strong> 写题面、评分命令和 Debian/Python 依赖；三项直接放在 ZIP 顶层。</div>
+                    <div style={{ marginTop: 6, color: "#64748b" }}>
+                        上传后平台会构建环境并试跑参考提交。自检通过后即可组卷；有特殊工具链时可在 private/Dockerfile 配置。
+                    </div>
+                </div>
+            </details>
 
             {error && (
                 <div className="card" style={{ borderColor: "#fecaca", marginBottom: 14 }}>
@@ -357,6 +416,7 @@ export function ProblemBankPage() {
                                 <select className="select"
                                         style={SmallInputStyle}
                                         value={form.type}
+                                        disabled={form.hasProjectBundle}
                                         onChange={event => setForm({ ...form, type: event.target.value })}>
                                     {Object.keys(TypeOptionLabels).map(key => (
                                         <option key={key} value={key}>{TypeOptionLabels[key]}</option>
@@ -368,7 +428,11 @@ export function ProblemBankPage() {
                                 <select className="select"
                                         style={SmallInputStyle}
                                         value={form.language}
+                                        disabled={form.hasProjectBundle}
                                         onChange={event => setForm({ ...form, language: event.target.value })}>
+                                    {form.hasProjectBundle && !LanguageLabels[form.language] && (
+                                        <option value={form.language}>{form.language}</option>
+                                    )}
                                     {Object.keys(LanguageLabels).map(key => (
                                         <option key={key} value={key}>{LanguageLabels[key]}</option>
                                     ))}
@@ -423,7 +487,8 @@ export function ProblemBankPage() {
                             </div>
                         ) : (
                             <div className="card-sub" style={{ marginTop: 8 }}>
-                                学生提交源码包，平台按公开和隐藏脚本自动计分。
+                                {form.hasProjectBundle ? "学生提交题包中的全部公开文件，平台按题包评分。" :
+                                    "学生提交源码包，平台按公开和隐藏脚本自动计分。"}
                             </div>
                         )}
 
@@ -508,7 +573,7 @@ export function ProblemBankPage() {
                             </div>
                         ))}
 
-                        </> : (
+                        </> : !form.hasProjectBundle && (
                             <fieldset className="field" style={{ marginTop: 12 }}>
                                 <legend className="label">工程题附件</legend>
                                 {([
@@ -566,6 +631,7 @@ export function ProblemBankPage() {
                         <th>标题</th>
                         <th>题型</th>
                         <th>语言</th>
+                        <th>环境自检</th>
                         <th>难度</th>
                         <th>样例</th>
                         <th>隐藏</th>
@@ -575,11 +641,11 @@ export function ProblemBankPage() {
                     </thead>
                     <tbody>
                     {loading && (
-                        <tr><td colSpan={8} style={{ color: "#94a3b8" }}>加载中…</td></tr>
+                        <tr><td colSpan={9} style={{ color: "#94a3b8" }}>加载中…</td></tr>
                     )}
                     {!loading && problems.length === 0 && (
                         <tr>
-                            <td colSpan={8} style={{ color: "#94a3b8" }}>
+                            <td colSpan={9} style={{ color: "#94a3b8" }}>
                                 题库还是空的，点击右上角「新建题目」开始命题
                             </td>
                         </tr>
@@ -590,15 +656,43 @@ export function ProblemBankPage() {
                             <td><span className="badge blue">{TypeLabels[problem.type] || problem.type}</span></td>
                             <td>{LanguageLabels[problem.language] || problem.language}</td>
                             <td>
+                                {problem.hasProjectBundle ? (
+                                    <>
+                                        <span className={"badge " + (problem.preparationStatus === "ready" ? "green" :
+                                            problem.preparationStatus === "failed" ? "red" : "gray")}>
+                                            {problem.preparationStatus === "ready" ? "已通过" :
+                                                problem.preparationStatus === "failed" ? "失败" : "准备中"}
+                                        </span>
+                                        {problem.preparationMessage && (
+                                            <div style={{ maxWidth: 240, marginTop: 4, fontSize: 11, lineHeight: 1.4,
+                                                color: problem.preparationStatus === "failed" ? "#b91c1c" : "#64748b",
+                                                overflowWrap: "anywhere" }}>
+                                                {problem.preparationMessage}
+                                            </div>
+                                        )}
+                                        {problem.preparationStatus === "failed" && (
+                                            <button type="button" className="link" style={{ marginTop: 4 }}
+                                                    onClick={() => retryProjectPreparation(problem.id)
+                                                        .then(() => { toast("已重新开始准备", "success"); loadProblems(keyword); })
+                                                        .catch((e: ApiError) => setError(e.message))}>
+                                                重试自检
+                                            </button>
+                                        )}
+                                    </>
+                                ) : "—"}
+                            </td>
+                            <td>
                                 <span className={DifficultyBadge[problem.difficulty] || "badge gray"}>
                                     {DifficultyLabels[problem.difficulty] || problem.difficulty}
                                 </span>
                             </td>
-                            <td>{problem.sampleCount}</td>
-                            <td>{problem.hiddenCount}</td>
+                            <td>{problem.hasProjectBundle ? "题包内" : problem.sampleCount}</td>
+                            <td>{problem.hasProjectBundle ? "题包内" : problem.hiddenCount}</td>
                             <td>{formatTime(problem.updated)}</td>
                             <td>
-                                <span className="link" onClick={() => openEdit(problem.id)}>编辑</span>
+                                <span className="link" onClick={() => openEdit(problem.id)}>
+                                    {problem.hasProjectBundle ? "编辑题面" : "编辑"}
+                                </span>
                                 <span style={{ color: "#e2e8f0", margin: "0 6px" }}>|</span>
                                 <span className="link" style={{ color: "#dc2626" }} onClick={() => handleDelete(problem)}>
                                     删除
@@ -610,7 +704,7 @@ export function ProblemBankPage() {
                 </table>
                 <div className="table-footer">
                     <span>共 {problems.length} 道题</span>
-                    <span className="muted">隐藏测试仅在判题沙箱运行，不会挂载到考生容器</span>
+                    <span className="muted">隐藏测试不在学生浏览器展示，仅在隔离判题容器中使用</span>
                 </div>
             </div>
         </TeacherLayout>

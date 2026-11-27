@@ -46,6 +46,9 @@ def problem_summary(problem):
         "outputLimitKb": problem.output_limit_kb,
         "sampleCount": problem.samples.filter(is_sample=True).count(),
         "hiddenCount": problem.samples.filter(is_sample=False).count(),
+        "hasProjectBundle": hasattr(problem, "project_bundle"),
+        "preparationStatus": problem.project_bundle.preparation_status if hasattr(problem, "project_bundle") else None,
+        "preparationMessage": problem.project_bundle.preparation_message if hasattr(problem, "project_bundle") else "",
         "updated": problem.updated,
     }
 
@@ -62,6 +65,7 @@ def problem_detail(problem):
             "publicScript": bool(problem.project_public),
             "hiddenScript": bool(problem.project_hidden),
         },
+        "publicFiles": problem.project_bundle.public_files if hasattr(problem, "project_bundle") else None,
         "createdBy": problem.created_by.username if problem.created_by else "",
         "samples": [
             {
